@@ -15,7 +15,7 @@ function normalizePhone(phone) {
 }
 
 // ─────────────────────────────
-// 📊 ANALYTICS (FINAL FIXED)
+// 📊 ANALYTICS (PRODUCTION SAFE)
 // ─────────────────────────────
 exports.getAnalytics = async (req, res) => {
   try {
@@ -23,22 +23,26 @@ exports.getAnalytics = async (req, res) => {
       SELECT COALESCE(SUM(amount),0) AS total FROM payments
     `);
 
-    const scansQ = await query(`SELECT COUNT(*) FROM scans`);
-    const tagsQ = await query(`SELECT COUNT(*) FROM tags`);
+    const scansQ = await query(`
+      SELECT COUNT(*) AS total FROM scans
+    `);
 
-    // ✅ FIXED: correct source of truth (users table)
+    const tagsQ = await query(`
+      SELECT COUNT(*) AS total FROM tags
+    `);
+
     const agentsQ = await query(`
-      SELECT COUNT(*) 
+      SELECT COUNT(*) AS total
       FROM agents a
       JOIN users u ON u.id = a.user_id
       WHERE u.is_active = true
     `);
 
     return success(res, {
-      revenue: Number(revenueQ.rows[0].total || 0),
-      totalScans: Number(scansQ.rows[0].count),
-      totalTags: Number(tagsQ.rows[0].count),
-      activeAgents: Number(agentsQ.rows[0].count),
+      revenue: Number(revenueQ.rows?.[0]?.total || 0),
+      totalScans: Number(scansQ.rows?.[0]?.total || 0),
+      totalTags: Number(tagsQ.rows?.[0]?.total || 0),
+      activeAgents: Number(agentsQ.rows?.[0]?.total || 0),
     });
 
   } catch (err) {
@@ -90,8 +94,8 @@ exports.createAgent = async (req, res) => {
 
       const { rows: agentRows } = await client.query(
         `INSERT INTO agents
-        (user_id, business_name, address, city, state, pincode, generated_user_id, created_by_admin)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (user_id, business_name, address, city, state, pincode, generated_user_id, created_by_admin, is_active)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)
         RETURNING *`,
         [
           userId,
@@ -144,10 +148,10 @@ exports.listAgents = async (req, res) => {
       LIMIT $1 OFFSET $2
     `, [limit, offset]);
 
-    const count = await query(`SELECT COUNT(*) FROM agents`);
+    const count = await query(`SELECT COUNT(*) AS total FROM agents`);
 
     return paginated(res, rows, {
-      total: Number(count.rows[0].count),
+      total: Number(count.rows?.[0]?.total || 0),
       page,
       limit
     });
@@ -230,7 +234,6 @@ exports.resetAgentPassword = async (req, res) => {
 // ─────────────────────────────
 exports.deactivateAgent = async (req, res) => {
   try {
-    // ✅ FIXED: deactivate via users table (source of truth)
     await query(`
       UPDATE users 
       SET is_active = false 
