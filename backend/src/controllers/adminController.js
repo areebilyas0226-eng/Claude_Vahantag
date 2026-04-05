@@ -3,127 +3,97 @@
 const bcrypt = require('bcrypt');
 const { customAlphabet } = require('nanoid');
 const { query, withTransaction } = require('../config/db');
-const { success, error, paginated } = require('../utils/response');
+const { success, error } = require('../utils/response');
 const { sendSms } = require('../services/smsService');
 const logger = require('../utils/logger');
 
 const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 8);
 const SALT_ROUNDS = 10;
 
-function normalizePhone(phone) {
-  return String(phone || '').replace(/\D/g, '');
-}
+const normalizePhone = (p) => String(p || '').replace(/\D/g, '');
 
 // ─────────────────────────────
-// 📊 ANALYTICS (PRODUCTION SAFE)
+// 📊 ANALYTICS (CRASH SAFE)
 // ─────────────────────────────
 exports.getAnalytics = async (req, res) => {
   try {
-    const revenueQ = await query(`
-      SELECT COALESCE(SUM(amount),0) AS total FROM payments
-    `);
+    let revenue = 0;
 
-    const scansQ = await query(`
-      SELECT COUNT(*) AS total FROM scans
-    `);
+    try {
+      const r = await query(`SELECT COALESCE(SUM(amount),0) AS total FROM payments`);
+      revenue = Number(r.rows?.[0]?.total || 0);
+    } catch {}
 
-    const tagsQ = await query(`
-      SELECT COUNT(*) AS total FROM tags
-    `);
+    const scans = await query(`SELECT COUNT(*) AS total FROM scans`);
+    const tags = await query(`SELECT COUNT(*) AS total FROM tags`);
 
-    const agentsQ = await query(`
+    const agents = await query(`
       SELECT COUNT(*) AS total
       FROM agents a
       JOIN users u ON u.id = a.user_id
-      WHERE u.is_active = true
+      WHERE COALESCE(u.is_active,true) = true
     `);
 
     return success(res, {
-      revenue: Number(revenueQ.rows?.[0]?.total || 0),
-      totalScans: Number(scansQ.rows?.[0]?.total || 0),
-      totalTags: Number(tagsQ.rows?.[0]?.total || 0),
-      activeAgents: Number(agentsQ.rows?.[0]?.total || 0),
+      revenue,
+      totalScans: Number(scans.rows[0].total),
+      totalTags: Number(tags.rows[0].total),
+      activeAgents: Number(agents.rows[0].total),
     });
 
   } catch (err) {
-    logger.error('Analytics error:', err);
-    return error(res, 'Failed to load analytics', 500);
+    logger.error(err);
+    return error(res, 'Analytics failed', 500);
   }
 };
 
 // ─────────────────────────────
-// CREATE AGENT
+// CREATE AGENT (FIXED)
 // ─────────────────────────────
 exports.createAgent = async (req, res) => {
   try {
-    let { name, phone, email, businessName, address, city, state, pincode } = req.body;
+    let { name, phone, businessName } = req.body;
 
     if (!name || !phone || !businessName) {
-      return error(res, 'Name, phone, businessName required', 400);
+      return error(res, 'Required fields missing', 400);
     }
 
     phone = normalizePhone(phone);
 
-    if (phone.length !== 10) {
-      return error(res, 'Phone must be 10 digits', 400);
-    }
-
-    const generatedUserId = `AGT-${nanoid()}`;
     const tempPassword = `Vahan@${nanoid().slice(0, 6)}`;
-    const passwordHash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
+    const hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
 
     const agent = await withTransaction(async (client) => {
 
       const { rows: existing } = await client.query(
-        'SELECT id FROM users WHERE phone = $1 FOR UPDATE',
+        `SELECT id FROM users WHERE phone=$1`,
         [phone]
       );
 
       if (existing.length) {
-        throw { statusCode: 409, message: 'Phone already registered' };
+        throw { message: 'Phone already exists', statusCode: 409 };
       }
 
       const { rows: userRows } = await client.query(
-        `INSERT INTO users (role, name, phone, email, password_hash, is_active)
-         VALUES ('agent', $1, $2, $3, $4, true)
+        `INSERT INTO users (name, phone, password_hash, role, is_active)
+         VALUES ($1,$2,$3,'agent',true)
          RETURNING id`,
-        [name.trim(), phone, email || null, passwordHash]
+        [name, phone, hash]
       );
-
-      const userId = userRows[0].id;
 
       const { rows: agentRows } = await client.query(
-        `INSERT INTO agents
-        (user_id, business_name, address, city, state, pincode, generated_user_id, created_by_admin, is_active)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)
-        RETURNING *`,
-        [
-          userId,
-          businessName.trim(),
-          address || null,
-          city || null,
-          state || null,
-          pincode || null,
-          generatedUserId,
-          req.user.id
-        ]
-      );
-
-      await client.query(
-        'UPDATE users SET agent_id = $1 WHERE id = $2',
-        [agentRows[0].id, userId]
+        `INSERT INTO agents (user_id, business_name)
+         VALUES ($1,$2)
+         RETURNING *`,
+        [userRows[0].id, businessName]
       );
 
       return agentRows[0];
     });
 
-    sendSms(phone, `ID: ${generatedUserId} Password: ${tempPassword}`).catch(() => {});
+    sendSms(phone, `Password: ${tempPassword}`).catch(() => {});
 
-    return success(res, {
-      agentId: agent.id,
-      generatedUserId,
-      tempPassword
-    });
+    return success(res, { agent, tempPassword });
 
   } catch (err) {
     logger.error(err);
@@ -132,29 +102,31 @@ exports.createAgent = async (req, res) => {
 };
 
 // ─────────────────────────────
-// LIST AGENTS
+// LIST AGENTS (CORRECT COUNTS)
 // ─────────────────────────────
 exports.listAgents = async (req, res) => {
   try {
-    const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 20;
-    const offset = (page - 1) * limit;
-
     const { rows } = await query(`
-      SELECT a.*, u.name, u.phone, u.is_active
+      SELECT 
+        a.id,
+        u.name,
+        u.phone,
+        COALESCE(u.is_active,true) AS is_active,
+
+        COUNT(DISTINCT t.id) FILTER (WHERE t.status='active') AS active,
+        COUNT(DISTINCT t.id) FILTER (WHERE t.status='sold') AS sold,
+        COUNT(DISTINCT o.id) AS orders
+
       FROM agents a
       JOIN users u ON u.id = a.user_id
-      ORDER BY a.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [limit, offset]);
+      LEFT JOIN tags t ON t.agent_id = a.id
+      LEFT JOIN tag_orders o ON o.agent_id = a.id
 
-    const count = await query(`SELECT COUNT(*) AS total FROM agents`);
+      GROUP BY a.id, u.name, u.phone, u.is_active
+      ORDER BY a.id DESC
+    `);
 
-    return paginated(res, rows, {
-      total: Number(count.rows?.[0]?.total || 0),
-      page,
-      limit
-    });
+    return success(res, rows);
 
   } catch (err) {
     logger.error(err);
@@ -163,36 +135,118 @@ exports.listAgents = async (req, res) => {
 };
 
 // ─────────────────────────────
-// LIST TAGS
+// TAGS
 // ─────────────────────────────
 exports.listAllTags = async (req, res) => {
   try {
-    const { rows } = await query(`
-      SELECT t.*, tc.name AS category_name
-      FROM tags t
-      LEFT JOIN tag_categories tc ON tc.id = t.category_id
-      ORDER BY t.created_at DESC
-    `);
+    const status = req.query.status;
+
+    let sql = `SELECT * FROM tags`;
+    let params = [];
+
+    if (status) {
+      sql += ` WHERE status = $1`;
+      params.push(status);
+    }
+
+    sql += ` ORDER BY created_at DESC`;
+
+    const { rows } = await query(sql, params);
 
     return success(res, rows);
 
   } catch (err) {
     logger.error(err);
-    return error(res, 'Failed to fetch tags', 500);
+    return error(res, 'Failed', 500);
   }
 };
 
 // ─────────────────────────────
-// LIST ORDERS
+// TAG DETAILS
+// ─────────────────────────────
+exports.getTagDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { rows } = await query(`
+      SELECT 
+        t.*,
+        v.vehicle_number,
+        v.owner_name,
+        u.name AS agent_name,
+        u.phone AS agent_phone
+      FROM tags t
+      LEFT JOIN vehicles v ON v.tag_id = t.id
+      LEFT JOIN agents a ON a.id = t.agent_id
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE t.id = $1
+    `, [id]);
+
+    if (!rows.length) return error(res, 'Not found', 404);
+
+    return success(res, rows[0]);
+
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed', 500);
+  }
+};
+
+// ─────────────────────────────
+// ORDERS (FIXED TABLE)
 // ─────────────────────────────
 exports.listOrders = async (req, res) => {
   try {
-    const { rows } = await query(`
+    const status = req.query.status;
+
+    let sql = `
       SELECT o.*, u.name AS agent_name
       FROM tag_orders o
-      JOIN agents a ON a.id = o.agent_id
-      JOIN users u ON u.id = a.user_id
-      ORDER BY o.created_at DESC
+      LEFT JOIN agents a ON a.id = o.agent_id
+      LEFT JOIN users u ON u.id = a.user_id
+    `;
+
+    let params = [];
+
+    if (status) {
+      sql += ` WHERE o.status = $1`;
+      params.push(status);
+    }
+
+    sql += ` ORDER BY o.created_at DESC`;
+
+    const { rows } = await query(sql, params);
+
+    return success(res, rows);
+
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed', 500);
+  }
+};
+
+// ─────────────────────────────
+// SUBSCRIPTIONS (FILTER)
+// ─────────────────────────────
+exports.getSubscriptions = async (req, res) => {
+  try {
+    const type = req.query.type;
+
+    let filter = '';
+    if (type === 'active') filter = 'WHERE s.expires_at > NOW()';
+    if (type === 'expired') filter = 'WHERE s.expires_at <= NOW()';
+
+    const { rows } = await query(`
+      SELECT 
+        s.*,
+        t.code,
+        u.name,
+        u.phone
+      FROM subscriptions s
+      LEFT JOIN tags t ON t.id = s.tag_id
+      LEFT JOIN users u ON u.id = s.user_id
+      ${filter}
+      ORDER BY s.created_at DESC
     `);
 
     return success(res, rows);
@@ -208,20 +262,22 @@ exports.listOrders = async (req, res) => {
 // ─────────────────────────────
 exports.resetAgentPassword = async (req, res) => {
   try {
-    const { rows } = await query(`
-      SELECT u.id FROM agents a
-      JOIN users u ON u.id = a.user_id
-      WHERE a.id = $1
-    `, [req.params.id]);
+    const { rows } = await query(
+      `SELECT user_id FROM agents WHERE id=$1`,
+      [req.params.id]
+    );
 
     if (!rows.length) return error(res, 'Not found', 404);
 
-    const newPassword = `Vahan@${nanoid().slice(0, 6)}`;
-    const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    const newPass = `Vahan@${nanoid().slice(0, 6)}`;
+    const hash = await bcrypt.hash(newPass, SALT_ROUNDS);
 
-    await query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, rows[0].id]);
+    await query(
+      `UPDATE users SET password_hash=$1 WHERE id=$2`,
+      [hash, rows[0].user_id]
+    );
 
-    return success(res, { newPassword });
+    return success(res, { newPass });
 
   } catch (err) {
     logger.error(err);
@@ -235,11 +291,8 @@ exports.resetAgentPassword = async (req, res) => {
 exports.deactivateAgent = async (req, res) => {
   try {
     await query(`
-      UPDATE users 
-      SET is_active = false 
-      WHERE id = (
-        SELECT user_id FROM agents WHERE id = $1
-      )
+      UPDATE users SET is_active=false
+      WHERE id=(SELECT user_id FROM agents WHERE id=$1)
     `, [req.params.id]);
 
     return success(res, null, 'Deactivated');
@@ -248,4 +301,25 @@ exports.deactivateAgent = async (req, res) => {
     logger.error(err);
     return error(res, 'Failed', 500);
   }
+};
+
+// ─────────────────────────────
+// PLANS
+// ─────────────────────────────
+exports.getPlans = async (req, res) => {
+  const { rows } = await query(`SELECT * FROM subscription_plans ORDER BY id DESC`);
+  return success(res, rows);
+};
+
+exports.updatePlan = async (req, res) => {
+  const { id } = req.params;
+  const { price } = req.body;
+
+  if (!price || price <= 0) {
+    return error(res, 'Invalid price', 400);
+  }
+
+  await query(`UPDATE subscription_plans SET price=$1 WHERE id=$2`, [price, id]);
+
+  return success(res, null, 'Plan updated');
 };
