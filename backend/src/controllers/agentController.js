@@ -43,11 +43,17 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER + AUTO TAG GENERATION 🔥
+// PLACE ORDER + SAFE TAG GENERATION 🔥
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
-    const { categoryId, quantity, notes } = req.body;
+    let { categoryId, quantity, notes } = req.body;
+
+    quantity = Number(quantity);
+
+    if (!categoryId || !quantity || quantity < 1) {
+      return error(res, 'Invalid input', 400);
+    }
 
     const agentId = await getAgentId(req.user.id);
     if (!agentId) return error(res, 'Agent not found', 404);
@@ -59,16 +65,21 @@ exports.placeOrder = async (req, res, next) => {
     );
     if (!cat.length) return error(res, 'Invalid category', 404);
 
-    // 1. Create order (auto-approved for MVP)
+    // ─────────────────────────
+    // TRANSACTION START
+    // ─────────────────────────
+    await query('BEGIN');
+
+    // 1. Create order (VALID ENUM VALUE ✅)
     const orderRes = await query(
       `INSERT INTO tag_orders 
        (agent_id, category_id, qty_ordered, notes, status, created_at)
-       VALUES ($1,$2,$3,$4,'approved',NOW())
+       VALUES ($1,$2,$3,$4,'pending',NOW())
        RETURNING *`,
       [agentId, categoryId, quantity, notes || null]
     );
 
-    // 2. 🔥 BULK TAG GENERATION (FAST + SCALABLE)
+    // 2. Bulk tag insert (safe)
     const values = [];
     const params = [];
 
@@ -78,11 +89,18 @@ exports.placeOrder = async (req, res, next) => {
       params.push(agentId, categoryId);
     }
 
-    await query(
-      `INSERT INTO tags (agent_id, category_id, status, created_at)
-       VALUES ${values.join(',')}`,
-      params
-    );
+    if (values.length > 0) {
+      await query(
+        `INSERT INTO tags (agent_id, category_id, status, created_at)
+         VALUES ${values.join(',')}`,
+        params
+      );
+    }
+
+    // ─────────────────────────
+    // COMMIT
+    // ─────────────────────────
+    await query('COMMIT');
 
     return success(
       res,
@@ -91,6 +109,13 @@ exports.placeOrder = async (req, res, next) => {
       201
     );
   } catch (err) {
+    // ─────────────────────────
+    // ROLLBACK (CRITICAL)
+    // ─────────────────────────
+    try {
+      await query('ROLLBACK');
+    } catch (_) {}
+
     next(err);
   }
 };
@@ -118,7 +143,7 @@ exports.getTags = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// GET ORDERS (PAGINATED)
+// GET ORDERS
 // ─────────────────────────────────────────
 exports.getOrders = async (req, res, next) => {
   try {
