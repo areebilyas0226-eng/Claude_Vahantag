@@ -44,7 +44,7 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER (FINAL FIXED ✅)
+// PLACE ORDER (FINAL PRODUCTION ✅)
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
@@ -59,6 +59,7 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('BEGIN');
 
+    // Create parent order
     const orderRes = await query(
       `INSERT INTO tag_orders (agent_id, status, notes, created_at)
        VALUES ($1, 'pending', $2, NOW())
@@ -68,7 +69,7 @@ exports.placeOrder = async (req, res, next) => {
 
     const orderId = orderRes.rows[0].id;
 
-    let totalQty = 0; // 🔥 critical fix
+    let totalQty = 0;
 
     for (const item of items) {
       let { categoryId, quantity } = item;
@@ -78,14 +79,14 @@ exports.placeOrder = async (req, res, next) => {
         throw new Error('Invalid item data');
       }
 
-      // validate category
+      // Validate category
       const { rows: cat } = await query(
         'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
         [categoryId]
       );
       if (!cat.length) throw new Error('Invalid category');
 
-      // save item
+      // Save order item
       await query(
         `INSERT INTO tag_order_items (order_id, category_id, quantity)
          VALUES ($1, $2, $3)`,
@@ -94,8 +95,9 @@ exports.placeOrder = async (req, res, next) => {
 
       totalQty += quantity;
 
-      // 🔥 chunking to avoid query size crash
+      // Batch insert tags
       const chunkSize = 500;
+
       for (let start = 0; start < quantity; start += chunkSize) {
         const batch = Math.min(chunkSize, quantity - start);
 
@@ -118,19 +120,33 @@ exports.placeOrder = async (req, res, next) => {
       }
     }
 
-    // ✅ update generated qty (CRITICAL FIX)
+    // ✅ CRITICAL FIX: update both
     await query(
       `UPDATE tag_orders 
-       SET qty_generated = $1 
+       SET qty_generated = $1,
+           qty_ordered = $1
        WHERE id = $2`,
       [totalQty, orderId]
     );
 
     await query('COMMIT');
 
+    // ✅ RETURN FULL ORDER DATA
+    const { rows: itemsData } = await query(
+      `SELECT category_id, quantity 
+       FROM tag_order_items 
+       WHERE order_id = $1`,
+      [orderId]
+    );
+
     return success(
       res,
-      { ...orderRes.rows[0], qty_generated: totalQty },
+      {
+        ...orderRes.rows[0],
+        qty_generated: totalQty,
+        qty_ordered: totalQty,
+        items: itemsData
+      },
       'Order placed successfully',
       201
     );
