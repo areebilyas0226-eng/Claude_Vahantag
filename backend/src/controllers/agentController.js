@@ -2,7 +2,7 @@
 
 const { query } = require('../config/db');
 const { success, error } = require('../utils/response');
-const crypto = require('crypto'); // ✅ QR generation
+const crypto = require('crypto');
 
 // ─────────────────────────────────────────
 // HELPER: GET AGENT ID
@@ -44,7 +44,7 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER (MULTI CATEGORY FINAL ✅)
+// PLACE ORDER (FINAL FIXED ✅)
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
@@ -59,7 +59,6 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('BEGIN');
 
-    // ✅ Create parent order
     const orderRes = await query(
       `INSERT INTO tag_orders (agent_id, status, notes, created_at)
        VALUES ($1, 'pending', $2, NOW())
@@ -69,41 +68,48 @@ exports.placeOrder = async (req, res, next) => {
 
     const orderId = orderRes.rows[0].id;
 
-    // 🔁 Loop items
-    for (const item of items) {
-      const { categoryId, quantity } = item;
+    let totalQty = 0; // 🔥 critical fix
 
-      if (!categoryId || !quantity || quantity < 1) {
+    for (const item of items) {
+      let { categoryId, quantity } = item;
+      quantity = Number(quantity);
+
+      if (!categoryId || !Number.isInteger(quantity) || quantity < 1) {
         throw new Error('Invalid item data');
       }
 
-      // ✅ Validate category
+      // validate category
       const { rows: cat } = await query(
         'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
         [categoryId]
       );
       if (!cat.length) throw new Error('Invalid category');
 
-      // ✅ Save order item
+      // save item
       await query(
         `INSERT INTO tag_order_items (order_id, category_id, quantity)
          VALUES ($1, $2, $3)`,
         [orderId, categoryId, quantity]
       );
 
-      // ✅ Generate tags WITH QR CODE
-      const values = [];
-      const params = [];
+      totalQty += quantity;
 
-      for (let i = 0; i < quantity; i++) {
-        const qrCode = crypto.randomUUID(); // 🔥 FIX
+      // 🔥 chunking to avoid query size crash
+      const chunkSize = 500;
+      for (let start = 0; start < quantity; start += chunkSize) {
+        const batch = Math.min(chunkSize, quantity - start);
 
-        const idx = i * 3;
-        values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, 'unassigned', NOW())`);
-        params.push(agentId, categoryId, qrCode);
-      }
+        const values = [];
+        const params = [];
 
-      if (values.length > 0) {
+        for (let i = 0; i < batch; i++) {
+          const qrCode = crypto.randomUUID();
+          const idx = i * 3;
+
+          values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, 'unassigned', NOW())`);
+          params.push(agentId, categoryId, qrCode);
+        }
+
         await query(
           `INSERT INTO tags (agent_id, category_id, qr_code, status, created_at)
            VALUES ${values.join(',')}`,
@@ -112,14 +118,23 @@ exports.placeOrder = async (req, res, next) => {
       }
     }
 
+    // ✅ update generated qty (CRITICAL FIX)
+    await query(
+      `UPDATE tag_orders 
+       SET qty_generated = $1 
+       WHERE id = $2`,
+      [totalQty, orderId]
+    );
+
     await query('COMMIT');
 
     return success(
       res,
-      orderRes.rows[0],
+      { ...orderRes.rows[0], qty_generated: totalQty },
       'Order placed successfully',
       201
     );
+
   } catch (err) {
     try {
       await query('ROLLBACK');
