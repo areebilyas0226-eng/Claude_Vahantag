@@ -43,7 +43,7 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER
+// PLACE ORDER + AUTO TAG GENERATION 🔥
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
@@ -52,22 +52,44 @@ exports.placeOrder = async (req, res, next) => {
     const agentId = await getAgentId(req.user.id);
     if (!agentId) return error(res, 'Agent not found', 404);
 
-    // validate category
+    // Validate category
     const { rows: cat } = await query(
       'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
       [categoryId]
     );
     if (!cat.length) return error(res, 'Invalid category', 404);
 
-    const { rows } = await query(
+    // 1. Create order (auto-approved for MVP)
+    const orderRes = await query(
       `INSERT INTO tag_orders 
        (agent_id, category_id, qty_ordered, notes, status, created_at)
-       VALUES ($1,$2,$3,$4,'pending',NOW())
+       VALUES ($1,$2,$3,$4,'approved',NOW())
        RETURNING *`,
       [agentId, categoryId, quantity, notes || null]
     );
 
-    return success(res, rows[0], 'Order placed successfully', 201);
+    // 2. 🔥 BULK TAG GENERATION (FAST + SCALABLE)
+    const values = [];
+    const params = [];
+
+    for (let i = 0; i < quantity; i++) {
+      const idx = i * 2;
+      values.push(`($${idx + 1}, $${idx + 2}, 'unassigned', NOW())`);
+      params.push(agentId, categoryId);
+    }
+
+    await query(
+      `INSERT INTO tags (agent_id, category_id, status, created_at)
+       VALUES ${values.join(',')}`,
+      params
+    );
+
+    return success(
+      res,
+      orderRes.rows[0],
+      'Order placed & tags generated successfully',
+      201
+    );
   } catch (err) {
     next(err);
   }
