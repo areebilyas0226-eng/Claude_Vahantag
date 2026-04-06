@@ -177,7 +177,7 @@ exports.getTags = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// GET ORDERS (🔥 FINAL SAFE VERSION)
+// GET ORDERS (🔥 FINAL FIXED)
 // ─────────────────────────────────────────
 exports.getOrders = async (req, res, next) => {
   try {
@@ -194,22 +194,30 @@ exports.getOrders = async (req, res, next) => {
         o.created_at,
         o.updated_at,
 
-        COALESCE(SUM(i.quantity), 0) AS qty_ordered,
+        -- ✅ always correct
+        (
+          SELECT COALESCE(SUM(quantity), 0)
+          FROM tag_order_items 
+          WHERE order_id = o.id
+        ) AS qty_ordered,
 
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'category_id', i.category_id,
-              'quantity', i.quantity
-            )
-          ) FILTER (WHERE i.id IS NOT NULL),
-          '[]'
+        -- ✅ always full items
+        (
+          SELECT COALESCE(
+            json_agg(
+              json_build_object(
+                'category_id', category_id,
+                'quantity', quantity
+              )
+            ),
+            '[]'
+          )
+          FROM tag_order_items 
+          WHERE order_id = o.id
         ) AS items
 
       FROM tag_orders o
-      LEFT JOIN tag_order_items i ON o.id = i.order_id
       WHERE o.agent_id = $1
-      GROUP BY o.id
       ORDER BY o.created_at DESC
       `,
       [agentId]
