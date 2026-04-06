@@ -43,14 +43,14 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER (MULTI CATEGORY + SAFE)
+// PLACE ORDER (MULTI CATEGORY FIXED ✅)
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
-    const { items } = req.body;
+    const { items, notes } = req.body;
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return error(res, 'Invalid input', 400);
+    if (!Array.isArray(items) || items.length === 0) {
+      return error(res, 'Items required', 400);
     }
 
     const agentId = await getAgentId(req.user.id);
@@ -58,57 +58,51 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('BEGIN');
 
-    // 1️⃣ Create parent order
+    // ✅ Parent order (no category/qty here)
     const orderRes = await query(
-      `INSERT INTO tag_orders (agent_id, status, created_at)
-       VALUES ($1, 'pending', NOW())
+      `INSERT INTO tag_orders (agent_id, status, notes, created_at)
+       VALUES ($1, 'pending', $2, NOW())
        RETURNING *`,
-      [agentId]
+      [agentId, notes || null]
     );
 
-    const order = orderRes.rows[0];
+    const orderId = orderRes.rows[0].id;
 
-    // 2️⃣ Process each category
+    // 🔁 Loop items
     for (const item of items) {
       const { categoryId, quantity } = item;
 
-      const qty = Number(quantity);
-
-      if (!categoryId || !qty || qty < 1) {
-        await query('ROLLBACK');
-        return error(res, 'Invalid item data', 400);
+      if (!categoryId || !quantity || quantity < 1) {
+        throw new Error('Invalid item data');
       }
 
-      // Validate category
+      // ✅ Validate category
       const { rows: cat } = await query(
         'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
         [categoryId]
       );
+      if (!cat.length) throw new Error('Invalid category');
 
-      if (!cat.length) {
-        await query('ROLLBACK');
-        return error(res, 'Invalid category', 400);
-      }
+      // ✅ Save item
+      await query(
+        `INSERT INTO tag_order_items (order_id, category_id, quantity)
+         VALUES ($1, $2, $3)`,
+        [orderId, categoryId, quantity]
+      );
 
-      // 🔥 BULK TAG INSERT WITH QR
+      // ✅ Generate tags
       const values = [];
       const params = [];
 
-      for (let i = 0; i < qty; i++) {
-        const idx = i * 3;
-
-        const qr = `TAG-${Date.now()}-${Math.random()
-          .toString(36)
-          .substring(2, 8)}`;
-
-        values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, 'unassigned', NOW())`);
-
-        params.push(agentId, categoryId, qr);
+      for (let i = 0; i < quantity; i++) {
+        const idx = i * 2;
+        values.push(`($${idx + 1}, $${idx + 2}, 'unassigned', NOW())`);
+        params.push(agentId, categoryId);
       }
 
       if (values.length > 0) {
         await query(
-          `INSERT INTO tags (agent_id, category_id, qr_code, status, created_at)
+          `INSERT INTO tags (agent_id, category_id, status, created_at)
            VALUES ${values.join(',')}`,
           params
         );
@@ -117,8 +111,12 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('COMMIT');
 
-    return success(res, order, 'Order placed successfully', 201);
-
+    return success(
+      res,
+      orderRes.rows[0],
+      'Order placed successfully',
+      201
+    );
   } catch (err) {
     try {
       await query('ROLLBACK');
@@ -158,35 +156,22 @@ exports.getOrders = async (req, res, next) => {
     const agentId = await getAgentId(req.user.id);
     if (!agentId) return error(res, 'Agent not found', 404);
 
-    const { page = 1, limit = 20 } = req.query;
-    const offset = (page - 1) * limit;
-
-    const countRes = await query(
-      `SELECT COUNT(*) FROM tag_orders WHERE agent_id = $1`,
-      [agentId]
-    );
-
     const { rows } = await query(
       `SELECT *
        FROM tag_orders
        WHERE agent_id = $1
-       ORDER BY created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [agentId, limit, offset]
+       ORDER BY created_at DESC`,
+      [agentId]
     );
 
-    return paginated(res, rows, {
-      total: Number(countRes.rows[0].count),
-      page: Number(page),
-      limit: Number(limit),
-    });
+    return success(res, rows);
   } catch (err) {
     next(err);
   }
 };
 
 // ─────────────────────────────────────────
-// SALES STATS
+// SALES
 // ─────────────────────────────────────────
 exports.getSales = async (req, res, next) => {
   try {
