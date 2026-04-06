@@ -19,6 +19,19 @@ const app  = express();
 const PORT = process.env.PORT || 5000;
 
 // ─────────────────────────────────────────
+// ❌🔥 DISABLE CACHING (CRITICAL FIX)
+// ─────────────────────────────────────────
+app.set('etag', false); // ❌ disable 304 completely
+
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
+
+// ─────────────────────────────────────────
 // 🔥 GET LOCAL IP
 // ─────────────────────────────────────────
 function getLocalIP() {
@@ -62,7 +75,7 @@ const scanRoutes  = loadRoute('./routes/scan', 'scanRoutes');
 const cronRoutes  = loadRoute('./routes/cron', 'cronRoutes');
 
 // ─────────────────────────────────────────
-// 🔍 REQUEST LOGGER (CRITICAL DEBUG)
+// 🔍 REQUEST LOGGER
 // ─────────────────────────────────────────
 app.use((req, res, next) => {
   console.log(`➡️ ${req.method} ${req.originalUrl}`);
@@ -106,7 +119,7 @@ app.get('/health', (req, res) => {
 
 app.get('/health/db', async (req, res) => {
   try {
-    const dbOk = await testConnection();
+    await testConnection();
     res.json({ db: 'connected' });
   } catch {
     res.status(503).json({ db: 'failed' });
@@ -114,7 +127,7 @@ app.get('/health/db', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
-// 📌 ROUTES (ALIGNED WITH FRONTEND)
+// 📌 ROUTES
 // ─────────────────────────────────────────
 console.log('📌 Mounting routes...');
 
@@ -126,7 +139,7 @@ app.use('/api/scan', scanRoutes);
 app.use('/api/cron', cronRoutes);
 
 // ─────────────────────────────────────────
-// ❌ 404 HANDLER (VISIBLE)
+// ❌ 404 HANDLER
 // ─────────────────────────────────────────
 app.use((req, res, next) => {
   console.error(`❌ 404 NOT FOUND: ${req.method} ${req.originalUrl}`);
@@ -136,7 +149,7 @@ app.use((req, res, next) => {
 app.use(notFound);
 
 // ─────────────────────────────────────────
-// 💥 GLOBAL ERROR HANDLER (VERY IMPORTANT)
+// 💥 GLOBAL ERROR HANDLER
 // ─────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('💥 ERROR:', err.stack || err.message);
