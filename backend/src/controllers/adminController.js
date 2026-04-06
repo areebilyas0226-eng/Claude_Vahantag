@@ -13,17 +13,11 @@ const SALT_ROUNDS = 10;
 const normalizePhone = (p) => String(p || '').replace(/\D/g, '');
 
 // ─────────────────────────────
-// 📊 ANALYTICS (CRASH SAFE)
+// 📊 ANALYTICS (SAFE)
 // ─────────────────────────────
 exports.getAnalytics = async (req, res) => {
   try {
-    let revenue = 0;
-
-    try {
-      const r = await query(`SELECT COALESCE(SUM(amount),0) AS total FROM payments`);
-      revenue = Number(r.rows?.[0]?.total || 0);
-    } catch {}
-
+    const revenueRes = await query(`SELECT COALESCE(SUM(amount),0) AS total FROM payments`);
     const scans = await query(`SELECT COUNT(*) AS total FROM scans`);
     const tags = await query(`SELECT COUNT(*) AS total FROM tags`);
 
@@ -35,10 +29,10 @@ exports.getAnalytics = async (req, res) => {
     `);
 
     return success(res, {
-      revenue,
-      totalScans: Number(scans.rows[0].total),
-      totalTags: Number(tags.rows[0].total),
-      activeAgents: Number(agents.rows[0].total),
+      revenue: Number(revenueRes.rows[0]?.total || 0),
+      totalScans: Number(scans.rows[0]?.total || 0),
+      totalTags: Number(tags.rows[0]?.total || 0),
+      activeAgents: Number(agents.rows[0]?.total || 0),
     });
 
   } catch (err) {
@@ -48,7 +42,7 @@ exports.getAnalytics = async (req, res) => {
 };
 
 // ─────────────────────────────
-// CREATE AGENT (FIXED)
+// CREATE AGENT
 // ─────────────────────────────
 exports.createAgent = async (req, res) => {
   try {
@@ -102,7 +96,7 @@ exports.createAgent = async (req, res) => {
 };
 
 // ─────────────────────────────
-// LIST AGENTS (CORRECT COUNTS)
+// LIST AGENTS
 // ─────────────────────────────
 exports.listAgents = async (req, res) => {
   try {
@@ -112,16 +106,13 @@ exports.listAgents = async (req, res) => {
         u.name,
         u.phone,
         COALESCE(u.is_active,true) AS is_active,
-
         COUNT(DISTINCT t.id) FILTER (WHERE t.status='active') AS active,
         COUNT(DISTINCT t.id) FILTER (WHERE t.status='sold') AS sold,
         COUNT(DISTINCT o.id) AS orders
-
       FROM agents a
       JOIN users u ON u.id = a.user_id
       LEFT JOIN tags t ON t.agent_id = a.id
       LEFT JOIN tag_orders o ON o.agent_id = a.id
-
       GROUP BY a.id, u.name, u.phone, u.is_active
       ORDER BY a.id DESC
     `);
@@ -139,7 +130,7 @@ exports.listAgents = async (req, res) => {
 // ─────────────────────────────
 exports.listAllTags = async (req, res) => {
   try {
-    const status = req.query.status;
+    const { status, limit = 100 } = req.query;
 
     let sql = `SELECT * FROM tags`;
     let params = [];
@@ -149,7 +140,7 @@ exports.listAllTags = async (req, res) => {
       params.push(status);
     }
 
-    sql += ` ORDER BY created_at DESC`;
+    sql += ` ORDER BY created_at DESC LIMIT ${Number(limit)}`;
 
     const { rows } = await query(sql, params);
 
@@ -173,8 +164,8 @@ exports.getTagDetails = async (req, res) => {
         t.*,
         v.vehicle_number,
         v.owner_name,
-        u.name AS agent_name,
-        u.phone AS agent_phone
+        a.business_name,
+        u.phone
       FROM tags t
       LEFT JOIN vehicles v ON v.tag_id = t.id
       LEFT JOIN agents a ON a.id = t.agent_id
@@ -193,17 +184,20 @@ exports.getTagDetails = async (req, res) => {
 };
 
 // ─────────────────────────────
-// ORDERS (FIXED TABLE)
+// 🚨 ORDERS (CRITICAL FIX)
 // ─────────────────────────────
 exports.listOrders = async (req, res) => {
   try {
-    const status = req.query.status;
+    const { status, limit = 100 } = req.query;
 
     let sql = `
-      SELECT o.*, u.name AS agent_name
+      SELECT 
+        o.*,
+        COALESCE(a.business_name, 'Unknown') AS business_name,
+        COALESCE(c.name, 'General') AS category_name
       FROM tag_orders o
       LEFT JOIN agents a ON a.id = o.agent_id
-      LEFT JOIN users u ON u.id = a.user_id
+      LEFT JOIN categories c ON c.id = o.category_id
     `;
 
     let params = [];
@@ -213,7 +207,7 @@ exports.listOrders = async (req, res) => {
       params.push(status);
     }
 
-    sql += ` ORDER BY o.created_at DESC`;
+    sql += ` ORDER BY o.created_at DESC LIMIT ${Number(limit)}`;
 
     const { rows } = await query(sql, params);
 
@@ -226,27 +220,22 @@ exports.listOrders = async (req, res) => {
 };
 
 // ─────────────────────────────
-// SUBSCRIPTIONS (FILTER)
+// SUBSCRIPTIONS (FIXED)
 // ─────────────────────────────
 exports.getSubscriptions = async (req, res) => {
   try {
-    const type = req.query.type;
-
-    let filter = '';
-    if (type === 'active') filter = 'WHERE s.expires_at > NOW()';
-    if (type === 'expired') filter = 'WHERE s.expires_at <= NOW()';
-
     const { rows } = await query(`
       SELECT 
-        s.*,
-        t.code,
-        u.name,
-        u.phone
-      FROM subscriptions s
-      LEFT JOIN tags t ON t.id = s.tag_id
-      LEFT JOIN users u ON u.id = s.user_id
-      ${filter}
-      ORDER BY s.created_at DESC
+        t.id,
+        t.qr_code,
+        t.status,
+        t.expires_at,
+        a.business_name,
+        c.name AS category_name
+      FROM tags t
+      LEFT JOIN agents a ON a.id = t.agent_id
+      LEFT JOIN categories c ON c.id = t.category_id
+      ORDER BY t.created_at DESC
     `);
 
     return success(res, rows);
