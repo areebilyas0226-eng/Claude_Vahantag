@@ -5,7 +5,7 @@ const { success, error } = require('../utils/response');
 const crypto = require('crypto');
 
 // ─────────────────────────────────────────
-// HELPER: GET AGENT ID
+// HELPER
 // ─────────────────────────────────────────
 async function getAgentId(userId) {
   const { rows } = await query(
@@ -177,7 +177,7 @@ exports.getTags = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// GET ORDERS (🔥 FIXED FULL DATA)
+// GET ORDERS (🔥 FINAL SAFE VERSION)
 // ─────────────────────────────────────────
 exports.getOrders = async (req, res, next) => {
   try {
@@ -187,7 +187,15 @@ exports.getOrders = async (req, res, next) => {
     const { rows } = await query(
       `
       SELECT 
-        o.*,
+        o.id,
+        o.agent_id,
+        o.status,
+        o.notes,
+        o.created_at,
+        o.updated_at,
+
+        COALESCE(SUM(i.quantity), 0) AS qty_ordered,
+
         COALESCE(
           json_agg(
             json_build_object(
@@ -197,6 +205,7 @@ exports.getOrders = async (req, res, next) => {
           ) FILTER (WHERE i.id IS NOT NULL),
           '[]'
         ) AS items
+
       FROM tag_orders o
       LEFT JOIN tag_order_items i ON o.id = i.order_id
       WHERE o.agent_id = $1
