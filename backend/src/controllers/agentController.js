@@ -44,7 +44,7 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER
+// PLACE ORDER (FINAL CLEAN)
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
@@ -116,10 +116,10 @@ exports.placeOrder = async (req, res, next) => {
       }
     }
 
+    // ✅ ONLY GENERATED (NO DUPLICATE DATA)
     await query(
       `UPDATE tag_orders 
-       SET qty_generated = $1,
-           qty_ordered = $1
+       SET qty_generated = $1
        WHERE id = $2`,
       [totalQty, orderId]
     );
@@ -138,7 +138,7 @@ exports.placeOrder = async (req, res, next) => {
       {
         ...orderRes.rows[0],
         qty_generated: totalQty,
-        qty_ordered: totalQty,
+        qty_ordered: totalQty, // computed response only
         items: itemsData
       },
       'Order placed successfully',
@@ -177,7 +177,7 @@ exports.getTags = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// GET ORDERS (🔥 FINAL FIXED)
+// GET ORDERS (FINAL SAFE)
 // ─────────────────────────────────────────
 exports.getOrders = async (req, res, next) => {
   try {
@@ -194,14 +194,13 @@ exports.getOrders = async (req, res, next) => {
         o.created_at,
         o.updated_at,
 
-        -- ✅ always correct
+        -- always correct
         (
           SELECT COALESCE(SUM(quantity), 0)
           FROM tag_order_items 
           WHERE order_id = o.id
         ) AS qty_ordered,
 
-        -- ✅ always full items
         (
           SELECT COALESCE(
             json_agg(
