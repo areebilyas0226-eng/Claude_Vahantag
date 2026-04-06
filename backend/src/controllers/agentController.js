@@ -44,7 +44,7 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER (FINAL PRODUCTION ✅)
+// PLACE ORDER
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
@@ -59,7 +59,6 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('BEGIN');
 
-    // Create parent order
     const orderRes = await query(
       `INSERT INTO tag_orders (agent_id, status, notes, created_at)
        VALUES ($1, 'pending', $2, NOW())
@@ -79,14 +78,12 @@ exports.placeOrder = async (req, res, next) => {
         throw new Error('Invalid item data');
       }
 
-      // Validate category
       const { rows: cat } = await query(
         'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
         [categoryId]
       );
       if (!cat.length) throw new Error('Invalid category');
 
-      // Save order item
       await query(
         `INSERT INTO tag_order_items (order_id, category_id, quantity)
          VALUES ($1, $2, $3)`,
@@ -95,7 +92,6 @@ exports.placeOrder = async (req, res, next) => {
 
       totalQty += quantity;
 
-      // Batch insert tags
       const chunkSize = 500;
 
       for (let start = 0; start < quantity; start += chunkSize) {
@@ -120,7 +116,6 @@ exports.placeOrder = async (req, res, next) => {
       }
     }
 
-    // ✅ CRITICAL FIX: update both
     await query(
       `UPDATE tag_orders 
        SET qty_generated = $1,
@@ -131,7 +126,6 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('COMMIT');
 
-    // ✅ RETURN FULL ORDER DATA
     const { rows: itemsData } = await query(
       `SELECT category_id, quantity 
        FROM tag_order_items 
@@ -183,7 +177,7 @@ exports.getTags = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// GET ORDERS
+// GET ORDERS (🔥 FIXED FULL DATA)
 // ─────────────────────────────────────────
 exports.getOrders = async (req, res, next) => {
   try {
@@ -191,10 +185,24 @@ exports.getOrders = async (req, res, next) => {
     if (!agentId) return error(res, 'Agent not found', 404);
 
     const { rows } = await query(
-      `SELECT *
-       FROM tag_orders
-       WHERE agent_id = $1
-       ORDER BY created_at DESC`,
+      `
+      SELECT 
+        o.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'category_id', i.category_id,
+              'quantity', i.quantity
+            )
+          ) FILTER (WHERE i.id IS NOT NULL),
+          '[]'
+        ) AS items
+      FROM tag_orders o
+      LEFT JOIN tag_order_items i ON o.id = i.order_id
+      WHERE o.agent_id = $1
+      GROUP BY o.id
+      ORDER BY o.created_at DESC
+      `,
       [agentId]
     );
 
