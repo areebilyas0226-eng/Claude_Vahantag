@@ -1,7 +1,8 @@
 'use strict';
 
 const { query } = require('../config/db');
-const { success, error, paginated } = require('../utils/response');
+const { success, error } = require('../utils/response');
+const crypto = require('crypto'); // ✅ QR generation
 
 // ─────────────────────────────────────────
 // HELPER: GET AGENT ID
@@ -43,7 +44,7 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER (MULTI CATEGORY FIXED ✅)
+// PLACE ORDER (MULTI CATEGORY FINAL ✅)
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
@@ -58,7 +59,7 @@ exports.placeOrder = async (req, res, next) => {
 
     await query('BEGIN');
 
-    // ✅ Parent order (no category/qty here)
+    // ✅ Create parent order
     const orderRes = await query(
       `INSERT INTO tag_orders (agent_id, status, notes, created_at)
        VALUES ($1, 'pending', $2, NOW())
@@ -83,26 +84,28 @@ exports.placeOrder = async (req, res, next) => {
       );
       if (!cat.length) throw new Error('Invalid category');
 
-      // ✅ Save item
+      // ✅ Save order item
       await query(
         `INSERT INTO tag_order_items (order_id, category_id, quantity)
          VALUES ($1, $2, $3)`,
         [orderId, categoryId, quantity]
       );
 
-      // ✅ Generate tags
+      // ✅ Generate tags WITH QR CODE
       const values = [];
       const params = [];
 
       for (let i = 0; i < quantity; i++) {
-        const idx = i * 2;
-        values.push(`($${idx + 1}, $${idx + 2}, 'unassigned', NOW())`);
-        params.push(agentId, categoryId);
+        const qrCode = crypto.randomUUID(); // 🔥 FIX
+
+        const idx = i * 3;
+        values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, 'unassigned', NOW())`);
+        params.push(agentId, categoryId, qrCode);
       }
 
       if (values.length > 0) {
         await query(
-          `INSERT INTO tags (agent_id, category_id, status, created_at)
+          `INSERT INTO tags (agent_id, category_id, qr_code, status, created_at)
            VALUES ${values.join(',')}`,
           params
         );
