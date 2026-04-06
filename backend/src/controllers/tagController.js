@@ -13,35 +13,69 @@ const QR_BASE_URL = process.env.QR_BASE_URL || 'https://vahantag.com/scan';
 const BUFFER_MULTIPLIER = parseInt(process.env.QR_BUFFER_MULTIPLIER || '2', 10);
 
 // ─────────────────────────────────────────
-// GENERATE TAGS
+// GENERATE TAGS (FIXED)
 // ─────────────────────────────────────────
 exports.generateTagsForOrder = async (req, res, next) => {
   try {
-    const { orderId } = req.body;
+    const {
+      orderId,
+      order_id,
+      agent_id,
+      quantity,
+    } = req.body;
+
+    // ✅ support both formats
+    const finalOrderId = orderId || order_id;
+
+    console.log('📥 BODY:', req.body);
+
+    // ✅ VALIDATION
+    if (!finalOrderId) {
+      return error(res, 'Order ID required', 422);
+    }
 
     const { rows: orderRows } = await query(
       `SELECT * FROM tag_orders WHERE id = $1`,
-      [orderId]
+      [finalOrderId]
     );
 
-    if (!orderRows.length) return error(res, 'Order not found', 404);
+    if (!orderRows.length) {
+      return error(res, 'Order not found', 404);
+    }
 
     const order = orderRows[0];
-    const qty = order.qty_ordered * BUFFER_MULTIPLIER;
+
+    // ✅ quantity fallback logic
+    let finalQty;
+
+    if (quantity && !isNaN(quantity)) {
+      finalQty = Number(quantity);
+    } else if (order.qty_ordered) {
+      finalQty = Number(order.qty_ordered) * BUFFER_MULTIPLIER;
+    } else {
+      return error(res, 'Invalid quantity', 422);
+    }
+
+    if (!finalQty || finalQty <= 0) {
+      return error(res, 'Invalid quantity', 422);
+    }
 
     const generated = [];
 
     await withTransaction(async (client) => {
-      for (let i = 0; i < qty; i++) {
+      for (let i = 0; i < finalQty; i++) {
         let qrCode;
         let exists = true;
 
+        // ✅ ensure unique QR
         while (exists) {
           qrCode = `VT-${nanoid()}`;
+
           const check = await client.query(
             'SELECT id FROM tags WHERE qr_code = $1',
             [qrCode]
           );
+
           exists = check.rows.length > 0;
         }
 
@@ -49,21 +83,32 @@ exports.generateTagsForOrder = async (req, res, next) => {
           `INSERT INTO tags (qr_code, category_id, agent_id, order_id, status)
            VALUES ($1,$2,$3,$4,'unassigned')
            RETURNING id, qr_code`,
-          [qrCode, order.category_id, order.agent_id, orderId]
+          [
+            qrCode,
+            order.category_id,
+            order.agent_id,
+            finalOrderId,
+          ]
         );
 
         generated.push(rows[0]);
       }
 
       await client.query(
-        `UPDATE tag_orders SET status='fulfilled', qty_generated=$1 WHERE id=$2`,
-        [qty, orderId]
+        `UPDATE tag_orders 
+         SET status='fulfilled', qty_generated=$1 
+         WHERE id=$2`,
+        [finalQty, finalOrderId]
       );
     });
 
-    return success(res, { generated: qty, tags: generated });
+    return success(res, {
+      generated: finalQty,
+      tags: generated,
+    });
 
   } catch (err) {
+    console.log('❌ GENERATE ERROR:', err);
     next(err);
   }
 };
@@ -74,6 +119,8 @@ exports.generateTagsForOrder = async (req, res, next) => {
 exports.activateTag = async (req, res) => {
   try {
     const { qrCode } = req.body;
+
+    if (!qrCode) return error(res, 'QR required', 422);
 
     const { rows } = await query(
       `SELECT * FROM tags WHERE qr_code = $1`,
@@ -144,7 +191,7 @@ exports.updateTag = async (req, res) => {
 
     await query(
       `UPDATE tag_assets SET asset_data=$1 WHERE tag_id=$2`,
-      [JSON.stringify(req.body), id]
+      [JSON.stringify(req.body || {}), id]
     );
 
     return success(res, {}, 'Updated');
@@ -162,7 +209,9 @@ exports.renewTag = async (req, res) => {
     const { id } = req.params;
 
     await query(
-      `UPDATE tags SET expires_at = NOW() + INTERVAL '365 days' WHERE id=$1`,
+      `UPDATE tags 
+       SET expires_at = NOW() + INTERVAL '365 days' 
+       WHERE id=$1`,
       [id]
     );
 
