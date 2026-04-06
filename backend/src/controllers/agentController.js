@@ -43,75 +43,83 @@ exports.getInventory = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// PLACE ORDER + SAFE TAG GENERATION 🔥
+// PLACE ORDER (MULTI CATEGORY + SAFE)
 // ─────────────────────────────────────────
 exports.placeOrder = async (req, res, next) => {
   try {
-    let { categoryId, quantity, notes } = req.body;
+    const { items } = req.body;
 
-    quantity = Number(quantity);
-
-    if (!categoryId || !quantity || quantity < 1) {
+    if (!items || !Array.isArray(items) || items.length === 0) {
       return error(res, 'Invalid input', 400);
     }
 
     const agentId = await getAgentId(req.user.id);
     if (!agentId) return error(res, 'Agent not found', 404);
 
-    // Validate category
-    const { rows: cat } = await query(
-      'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
-      [categoryId]
-    );
-    if (!cat.length) return error(res, 'Invalid category', 404);
-
-    // ─────────────────────────
-    // TRANSACTION START
-    // ─────────────────────────
     await query('BEGIN');
 
-    // 1. Create order (VALID ENUM VALUE ✅)
+    // 1️⃣ Create parent order
     const orderRes = await query(
-      `INSERT INTO tag_orders 
-       (agent_id, category_id, qty_ordered, notes, status, created_at)
-       VALUES ($1,$2,$3,$4,'pending',NOW())
+      `INSERT INTO tag_orders (agent_id, status, created_at)
+       VALUES ($1, 'pending', NOW())
        RETURNING *`,
-      [agentId, categoryId, quantity, notes || null]
+      [agentId]
     );
 
-    // 2. Bulk tag insert (safe)
-    const values = [];
-    const params = [];
+    const order = orderRes.rows[0];
 
-    for (let i = 0; i < quantity; i++) {
-      const idx = i * 2;
-      values.push(`($${idx + 1}, $${idx + 2}, 'unassigned', NOW())`);
-      params.push(agentId, categoryId);
-    }
+    // 2️⃣ Process each category
+    for (const item of items) {
+      const { categoryId, quantity } = item;
 
-    if (values.length > 0) {
-      await query(
-        `INSERT INTO tags (agent_id, category_id, status, created_at)
-         VALUES ${values.join(',')}`,
-        params
+      const qty = Number(quantity);
+
+      if (!categoryId || !qty || qty < 1) {
+        await query('ROLLBACK');
+        return error(res, 'Invalid item data', 400);
+      }
+
+      // Validate category
+      const { rows: cat } = await query(
+        'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
+        [categoryId]
       );
+
+      if (!cat.length) {
+        await query('ROLLBACK');
+        return error(res, 'Invalid category', 400);
+      }
+
+      // 🔥 BULK TAG INSERT WITH QR
+      const values = [];
+      const params = [];
+
+      for (let i = 0; i < qty; i++) {
+        const idx = i * 3;
+
+        const qr = `TAG-${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(2, 8)}`;
+
+        values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, 'unassigned', NOW())`);
+
+        params.push(agentId, categoryId, qr);
+      }
+
+      if (values.length > 0) {
+        await query(
+          `INSERT INTO tags (agent_id, category_id, qr_code, status, created_at)
+           VALUES ${values.join(',')}`,
+          params
+        );
+      }
     }
 
-    // ─────────────────────────
-    // COMMIT
-    // ─────────────────────────
     await query('COMMIT');
 
-    return success(
-      res,
-      orderRes.rows[0],
-      'Order placed & tags generated successfully',
-      201
-    );
+    return success(res, order, 'Order placed successfully', 201);
+
   } catch (err) {
-    // ─────────────────────────
-    // ROLLBACK (CRITICAL)
-    // ─────────────────────────
     try {
       await query('ROLLBACK');
     } catch (_) {}
