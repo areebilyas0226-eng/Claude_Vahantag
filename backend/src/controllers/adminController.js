@@ -42,7 +42,7 @@ exports.getAnalytics = async (req, res) => {
 };
 
 // ─────────────────────────────
-// CREATE AGENT (FULL FIX)
+// CREATE AGENT (FINAL FIX)
 // ─────────────────────────────
 exports.createAgent = async (req, res) => {
   try {
@@ -61,7 +61,7 @@ exports.createAgent = async (req, res) => {
 
     const agent = await withTransaction(async (client) => {
 
-      // check duplicate
+      // duplicate check
       const { rows: existing } = await client.query(
         `SELECT id FROM users WHERE phone=$1`,
         [phone]
@@ -81,7 +81,7 @@ exports.createAgent = async (req, res) => {
 
       const userId = userRows[0].id;
 
-      // 🚨 FULL FIX: include ALL required columns
+      // ✅ FINAL FIX (TYPE SAFE)
       const { rows: agentRows } = await client.query(
         `INSERT INTO agents (
           user_id,
@@ -89,9 +89,14 @@ exports.createAgent = async (req, res) => {
           generated_user_id,
           created_by_admin
         )
-        VALUES ($1, $2, $1, $3)
+        VALUES ($1, $2, $3, $4)
         RETURNING *`,
-        [userId, businessName, adminId]
+        [
+          userId,                 // UUID / INT
+          businessName,           // TEXT
+          String(userId),         // TEXT (fix type mismatch)
+          adminId                 // UUID / INT
+        ]
       );
 
       return agentRows[0];
@@ -136,6 +141,7 @@ exports.listAgents = async (req, res) => {
     return error(res, 'Failed', 500);
   }
 };
+
 
 // ─────────────────────────────
 // TAGS
