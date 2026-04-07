@@ -42,7 +42,7 @@ exports.getAnalytics = async (req, res) => {
 };
 
 // ─────────────────────────────
-// CREATE AGENT (FINAL FIX)
+// CREATE AGENT (FINAL)
 // ─────────────────────────────
 exports.createAgent = async (req, res) => {
   try {
@@ -59,9 +59,8 @@ exports.createAgent = async (req, res) => {
 
     const adminId = req.user?.id || null;
 
-    const agent = await withTransaction(async (client) => {
+    const result = await withTransaction(async (client) => {
 
-      // duplicate check
       const { rows: existing } = await client.query(
         `SELECT id FROM users WHERE phone=$1`,
         [phone]
@@ -71,7 +70,6 @@ exports.createAgent = async (req, res) => {
         throw { message: 'Phone already exists', statusCode: 409 };
       }
 
-      // create user
       const { rows: userRows } = await client.query(
         `INSERT INTO users (name, phone, password_hash, role, is_active)
          VALUES ($1,$2,$3,'agent',true)
@@ -81,7 +79,6 @@ exports.createAgent = async (req, res) => {
 
       const userId = userRows[0].id;
 
-      // ✅ FINAL FIX (TYPE SAFE)
       const { rows: agentRows } = await client.query(
         `INSERT INTO agents (
           user_id,
@@ -89,22 +86,26 @@ exports.createAgent = async (req, res) => {
           generated_user_id,
           created_by_admin
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1,$2,$3,$4)
         RETURNING *`,
         [
-          userId,                 // UUID / INT
-          businessName,           // TEXT
-          String(userId),         // TEXT (fix type mismatch)
-          adminId                 // UUID / INT
+          userId,
+          businessName,
+          String(userId),
+          adminId
         ]
       );
 
-      return agentRows[0];
+      return { agent: agentRows[0], userId };
     });
 
     sendSms(phone, `Password: ${tempPassword}`).catch(() => {});
 
-    return success(res, { agent, tempPassword });
+    return success(res, {
+      agent: result.agent,
+      tempPassword,
+      loginId: String(result.userId) // ✅ FIXED
+    });
 
   } catch (err) {
     logger.error(err);
@@ -142,14 +143,12 @@ exports.listAgents = async (req, res) => {
   }
 };
 
-
 // ─────────────────────────────
 // TAGS
 // ─────────────────────────────
 exports.listAllTags = async (req, res) => {
   try {
     const { status, limit = 100 } = req.query;
-
     const safeLimit = Math.min(Number(limit) || 100, 500);
 
     let sql = `SELECT * FROM tags`;
@@ -163,102 +162,6 @@ exports.listAllTags = async (req, res) => {
     sql += ` ORDER BY created_at DESC LIMIT ${safeLimit}`;
 
     const { rows } = await query(sql, params);
-
-    return success(res, rows);
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Failed', 500);
-  }
-};
-
-// ─────────────────────────────
-// TAG DETAILS
-// ─────────────────────────────
-exports.getTagDetails = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { rows } = await query(`
-      SELECT 
-        t.*,
-        v.vehicle_number,
-        v.owner_name,
-        a.business_name,
-        u.phone
-      FROM tags t
-      LEFT JOIN vehicles v ON v.tag_id = t.id
-      LEFT JOIN agents a ON a.id = t.agent_id
-      LEFT JOIN users u ON u.id = a.user_id
-      WHERE t.id = $1
-    `, [id]);
-
-    if (!rows.length) return error(res, 'Not found', 404);
-
-    return success(res, rows[0]);
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Failed', 500);
-  }
-};
-
-// ─────────────────────────────
-// ORDERS
-// ─────────────────────────────
-exports.listOrders = async (req, res) => {
-  try {
-    const { status, limit = 100 } = req.query;
-    const safeLimit = Math.min(Number(limit) || 100, 500);
-
-    let sql = `
-      SELECT 
-        o.*,
-        COALESCE(a.business_name, 'Unknown') AS business_name,
-        COALESCE(c.name, 'General') AS category_name
-      FROM tag_orders o
-      LEFT JOIN agents a ON a.id = o.agent_id
-      LEFT JOIN categories c ON c.id = o.category_id
-    `;
-
-    let params = [];
-
-    if (status) {
-      sql += ` WHERE o.status = $1`;
-      params.push(status);
-    }
-
-    sql += ` ORDER BY o.created_at DESC LIMIT ${safeLimit}`;
-
-    const { rows } = await query(sql, params);
-
-    return success(res, rows);
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Failed', 500);
-  }
-};
-
-// ─────────────────────────────
-// SUBSCRIPTIONS
-// ─────────────────────────────
-exports.getSubscriptions = async (req, res) => {
-  try {
-    const { rows } = await query(`
-      SELECT 
-        t.id,
-        t.qr_code,
-        t.status,
-        t.expires_at,
-        a.business_name,
-        c.name AS category_name
-      FROM tags t
-      LEFT JOIN agents a ON a.id = t.agent_id
-      LEFT JOIN categories c ON c.id = t.category_id
-      ORDER BY t.created_at DESC
-    `);
-
     return success(res, rows);
 
   } catch (err) {
@@ -293,43 +196,4 @@ exports.resetAgentPassword = async (req, res) => {
     logger.error(err);
     return error(res, 'Failed', 500);
   }
-};
-
-// ─────────────────────────────
-// DEACTIVATE
-// ─────────────────────────────
-exports.deactivateAgent = async (req, res) => {
-  try {
-    await query(`
-      UPDATE users SET is_active=false
-      WHERE id=(SELECT user_id FROM agents WHERE id=$1)
-    `, [req.params.id]);
-
-    return success(res, null, 'Deactivated');
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Failed', 500);
-  }
-};
-
-// ─────────────────────────────
-// PLANS
-// ─────────────────────────────
-exports.getPlans = async (req, res) => {
-  const { rows } = await query(`SELECT * FROM subscription_plans ORDER BY id DESC`);
-  return success(res, rows);
-};
-
-exports.updatePlan = async (req, res) => {
-  const { id } = req.params;
-  const { price } = req.body;
-
-  if (!price || price <= 0) {
-    return error(res, 'Invalid price', 400);
-  }
-
-  await query(`UPDATE subscription_plans SET price=$1 WHERE id=$2`, [price, id]);
-
-  return success(res, null, 'Plan updated');
 };
