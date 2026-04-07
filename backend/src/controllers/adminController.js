@@ -13,7 +13,7 @@ const SALT_ROUNDS = 10;
 const normalizePhone = (p) => String(p || '').replace(/\D/g, '');
 
 // ─────────────────────────────
-// 📊 ANALYTICS (SAFE)
+// 📊 ANALYTICS
 // ─────────────────────────────
 exports.getAnalytics = async (req, res) => {
   try {
@@ -42,7 +42,7 @@ exports.getAnalytics = async (req, res) => {
 };
 
 // ─────────────────────────────
-// CREATE AGENT
+// CREATE AGENT (FULL FIX)
 // ─────────────────────────────
 exports.createAgent = async (req, res) => {
   try {
@@ -57,8 +57,11 @@ exports.createAgent = async (req, res) => {
     const tempPassword = `Vahan@${nanoid().slice(0, 6)}`;
     const hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
 
+    const adminId = req.user?.id || null;
+
     const agent = await withTransaction(async (client) => {
 
+      // check duplicate
       const { rows: existing } = await client.query(
         `SELECT id FROM users WHERE phone=$1`,
         [phone]
@@ -68,6 +71,7 @@ exports.createAgent = async (req, res) => {
         throw { message: 'Phone already exists', statusCode: 409 };
       }
 
+      // create user
       const { rows: userRows } = await client.query(
         `INSERT INTO users (name, phone, password_hash, role, is_active)
          VALUES ($1,$2,$3,'agent',true)
@@ -75,11 +79,19 @@ exports.createAgent = async (req, res) => {
         [name, phone, hash]
       );
 
+      const userId = userRows[0].id;
+
+      // 🚨 FULL FIX: include ALL required columns
       const { rows: agentRows } = await client.query(
-        `INSERT INTO agents (user_id, business_name)
-         VALUES ($1,$2)
-         RETURNING *`,
-        [userRows[0].id, businessName]
+        `INSERT INTO agents (
+          user_id,
+          business_name,
+          generated_user_id,
+          created_by_admin
+        )
+        VALUES ($1, $2, $1, $3)
+        RETURNING *`,
+        [userId, businessName, adminId]
       );
 
       return agentRows[0];
@@ -132,6 +144,8 @@ exports.listAllTags = async (req, res) => {
   try {
     const { status, limit = 100 } = req.query;
 
+    const safeLimit = Math.min(Number(limit) || 100, 500);
+
     let sql = `SELECT * FROM tags`;
     let params = [];
 
@@ -140,7 +154,7 @@ exports.listAllTags = async (req, res) => {
       params.push(status);
     }
 
-    sql += ` ORDER BY created_at DESC LIMIT ${Number(limit)}`;
+    sql += ` ORDER BY created_at DESC LIMIT ${safeLimit}`;
 
     const { rows } = await query(sql, params);
 
@@ -184,11 +198,12 @@ exports.getTagDetails = async (req, res) => {
 };
 
 // ─────────────────────────────
-// 🚨 ORDERS (CRITICAL FIX)
+// ORDERS
 // ─────────────────────────────
 exports.listOrders = async (req, res) => {
   try {
     const { status, limit = 100 } = req.query;
+    const safeLimit = Math.min(Number(limit) || 100, 500);
 
     let sql = `
       SELECT 
@@ -207,7 +222,7 @@ exports.listOrders = async (req, res) => {
       params.push(status);
     }
 
-    sql += ` ORDER BY o.created_at DESC LIMIT ${Number(limit)}`;
+    sql += ` ORDER BY o.created_at DESC LIMIT ${safeLimit}`;
 
     const { rows } = await query(sql, params);
 
@@ -220,7 +235,7 @@ exports.listOrders = async (req, res) => {
 };
 
 // ─────────────────────────────
-// SUBSCRIPTIONS (FIXED)
+// SUBSCRIPTIONS
 // ─────────────────────────────
 exports.getSubscriptions = async (req, res) => {
   try {
