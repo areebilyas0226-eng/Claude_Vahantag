@@ -14,9 +14,6 @@ const { validate } = require('../middleware/validate');
 // 🔐 Protect all routes
 router.use(authenticate, requireRole('admin'));
 
-// ─────────────────────────────
-// SAFE WRAPPER (HARDENED)
-// ─────────────────────────────
 function safe(handler) {
   return async (req, res, next) => {
     try {
@@ -28,15 +25,12 @@ function safe(handler) {
   };
 }
 
-// ─────────────────────────────
-// 📊 ANALYTICS
-// ─────────────────────────────
+// ───────── ANALYTICS ─────────
 router.get('/analytics', safe(adminController.getAnalytics));
 
-// ─────────────────────────────
-// 🧑 AGENTS
-// ─────────────────────────────
+// ───────── AGENTS ─────────
 router.get('/agents', safe(adminController.listAgents));
+router.get('/agents/:id', safe(adminController.getAgentDetail)); // ✅ ADD THIS
 
 router.post(
   '/agents',
@@ -49,91 +43,37 @@ router.post(
   safe(adminController.createAgent)
 );
 
-router.delete(
-  '/agents/:id',
-  [
-    param('id').isInt(),
-    validate
-  ],
-  safe(adminController.deactivateAgent)
-);
+// ───────── CATEGORIES (NEW FIX) ─────────
+router.get('/categories', safe(adminController.getCategories));
 
 router.post(
-  '/agents/:id/reset-password',
+  '/categories',
   [
-    param('id').isInt(),
+    body('name').notEmpty(),
+    body('activation_price').isNumeric(),
+    body('subscription_price').isNumeric(),
     validate
   ],
-  safe(adminController.resetAgentPassword)
+  safe(adminController.createCategory)
 );
-
-// ─────────────────────────────
-// 📦 ORDERS (FILTER READY)
-// ─────────────────────────────
-router.get(
-  '/orders',
-  [
-    query('status').optional().isString(),
-    validate
-  ],
-  safe(adminController.listOrders)
-);
-
-// ─────────────────────────────
-// 🏷 TAGS
-// ─────────────────────────────
-router.get(
-  '/tags',
-  [
-    query('status').optional().isString(),
-    validate
-  ],
-  safe(adminController.listAllTags)
-);
-
-router.get(
-  '/tags/:id',
-  [
-    param('id').isInt(),
-    validate
-  ],
-  safe(adminController.getTagDetails)
-);
-
-router.post(
-  '/tags/generate',
-  [
-    body('orderId').isInt(),
-    validate
-  ],
-  safe(tagController.generateTagsForOrder)
-);
-
-// ─────────────────────────────
-// 💳 SUBSCRIPTIONS
-// ─────────────────────────────
-router.get(
-  '/subscriptions',
-  [
-    query('type').optional().isString(), // active / expired / expiring
-    validate
-  ],
-  safe(adminController.getSubscriptions)
-);
-
-// ─────────────────────────────
-// 💰 PLANS (NEW)
-// ─────────────────────────────
-router.get('/plans', safe(adminController.getPlans));
 
 router.put(
-  '/plans/:id',
+  '/categories/:id',
   [
     param('id').isInt(),
-    body('price').isNumeric(),
     validate
   ],
-  safe(adminController.updatePlan)
+  safe(adminController.updateCategory)
 );
+
+// ───────── ORDERS ─────────
+router.get('/orders', safe(adminController.listOrders));
+
+// ───────── TAGS ─────────
+router.get('/tags', safe(adminController.listAllTags));
+router.post('/tags/generate', safe(tagController.generateTagsForOrder));
+
+// ───────── SUBSCRIPTIONS ─────────
+router.get('/subscriptions', safe(adminController.getSubscriptions));
 
 module.exports = router;

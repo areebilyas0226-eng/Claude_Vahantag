@@ -197,3 +197,78 @@ exports.resetAgentPassword = async (req, res) => {
     return error(res, 'Failed', 500);
   }
 };
+
+// ───────── AGENT DETAIL FIX ─────────
+exports.getAgentDetail = async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT 
+        a.id,
+        u.name,
+        u.phone,
+        a.business_name,
+        u.is_active
+      FROM agents a
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = $1
+    `, [req.params.id]);
+
+    if (!rows.length) return error(res, 'Agent not found', 404);
+
+    return success(res, rows[0]);
+
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed', 500);
+  }
+};
+
+// ───────── CATEGORIES ─────────
+exports.getCategories = async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT * FROM categories ORDER BY id DESC
+    `);
+    return success(res, rows);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed', 500);
+  }
+};
+
+exports.createCategory = async (req, res) => {
+  try {
+    const { name, activation_price, subscription_price } = req.body;
+
+    const { rows } = await query(`
+      INSERT INTO categories (name, activation_price, subscription_price, is_active)
+      VALUES ($1,$2,$3,true)
+      RETURNING *
+    `, [name, activation_price, subscription_price]);
+
+    return success(res, rows[0]);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Create failed', 500);
+  }
+};
+
+exports.updateCategory = async (req, res) => {
+  try {
+    const { activation_price, subscription_price, is_active } = req.body;
+
+    const { rows } = await query(`
+      UPDATE categories
+      SET activation_price=$1,
+          subscription_price=$2,
+          is_active=$3
+      WHERE id=$4
+      RETURNING *
+    `, [activation_price, subscription_price, is_active, req.params.id]);
+
+    return success(res, rows[0]);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Update failed', 500);
+  }
+};
