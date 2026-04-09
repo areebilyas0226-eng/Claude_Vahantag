@@ -14,6 +14,7 @@ const { validate } = require('../middleware/validate');
 // 🔐 Protect all routes
 router.use(authenticate, requireRole('admin'));
 
+// ───────── SAFE WRAPPER ─────────
 function safe(handler) {
   return async (req, res, next) => {
     try {
@@ -30,7 +31,15 @@ router.get('/analytics', safe(adminController.getAnalytics));
 
 // ───────── AGENTS ─────────
 router.get('/agents', safe(adminController.listAgents));
-router.get('/agents/:id', safe(adminController.getAgentDetail)); // ✅ ADD THIS
+
+router.get(
+  '/agents/:id',
+  [
+    param('id').isInt(),
+    validate
+  ],
+  safe(adminController.getAgentDetail)
+);
 
 router.post(
   '/agents',
@@ -43,15 +52,15 @@ router.post(
   safe(adminController.createAgent)
 );
 
-// ───────── CATEGORIES (NEW FIX) ─────────
+// ───────── CATEGORIES (FINAL FIX) ─────────
 router.get('/categories', safe(adminController.getCategories));
 
 router.post(
   '/categories',
   [
     body('name').notEmpty(),
-    body('activation_price').isNumeric(),
-    body('subscription_price').isNumeric(),
+    body('yearly_price').isNumeric(),
+    body('premium_unlock_price').optional().isNumeric(),
     validate
   ],
   safe(adminController.createCategory)
@@ -61,19 +70,51 @@ router.put(
   '/categories/:id',
   [
     param('id').isInt(),
+    body('yearly_price').isNumeric(),
+    body('premium_unlock_price').optional().isNumeric(),
+    body('is_active').isBoolean(),
     validate
   ],
   safe(adminController.updateCategory)
 );
 
 // ───────── ORDERS ─────────
-router.get('/orders', safe(adminController.listOrders));
+router.get(
+  '/orders',
+  [
+    query('status').optional().isString(),
+    validate
+  ],
+  safe(adminController.listOrders)
+);
 
 // ───────── TAGS ─────────
-router.get('/tags', safe(adminController.listAllTags));
-router.post('/tags/generate', safe(tagController.generateTagsForOrder));
+router.get(
+  '/tags',
+  [
+    query('status').optional().isString(),
+    validate
+  ],
+  safe(adminController.listAllTags)
+);
+
+router.post(
+  '/tags/generate',
+  [
+    body('orderId').isInt(),
+    validate
+  ],
+  safe(tagController.generateTagsForOrder)
+);
 
 // ───────── SUBSCRIPTIONS ─────────
-router.get('/subscriptions', safe(adminController.getSubscriptions));
+router.get(
+  '/subscriptions',
+  [
+    query('status').optional().isString(),
+    validate
+  ],
+  safe(adminController.getSubscriptions)
+);
 
 module.exports = router;

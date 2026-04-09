@@ -12,9 +12,7 @@ const SALT_ROUNDS = 10;
 
 const normalizePhone = (p) => String(p || '').replace(/\D/g, '');
 
-// ─────────────────────────────
-// 📊 ANALYTICS
-// ─────────────────────────────
+// ───────── ANALYTICS ─────────
 exports.getAnalytics = async (req, res) => {
   try {
     const revenueRes = await query(`SELECT COALESCE(SUM(amount),0) AS total FROM payments`);
@@ -41,9 +39,7 @@ exports.getAnalytics = async (req, res) => {
   }
 };
 
-// ─────────────────────────────
-// CREATE AGENT (FINAL)
-// ─────────────────────────────
+// ───────── CREATE AGENT ─────────
 exports.createAgent = async (req, res) => {
   try {
     let { name, phone, businessName } = req.body;
@@ -104,7 +100,7 @@ exports.createAgent = async (req, res) => {
     return success(res, {
       agent: result.agent,
       tempPassword,
-      loginId: String(result.userId) // ✅ FIXED
+      loginId: String(result.userId)
     });
 
   } catch (err) {
@@ -113,9 +109,7 @@ exports.createAgent = async (req, res) => {
   }
 };
 
-// ─────────────────────────────
-// LIST AGENTS
-// ─────────────────────────────
+// ───────── LIST AGENTS ─────────
 exports.listAgents = async (req, res) => {
   try {
     const { rows } = await query(`
@@ -143,9 +137,32 @@ exports.listAgents = async (req, res) => {
   }
 };
 
-// ─────────────────────────────
-// TAGS
-// ─────────────────────────────
+// ───────── AGENT DETAIL ─────────
+exports.getAgentDetail = async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT 
+        a.id,
+        u.name,
+        u.phone,
+        a.business_name,
+        u.is_active
+      FROM agents a
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = $1
+    `, [req.params.id]);
+
+    if (!rows.length) return error(res, 'Agent not found', 404);
+
+    return success(res, rows[0]);
+
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed', 500);
+  }
+};
+
+// ───────── TAGS ─────────
 exports.listAllTags = async (req, res) => {
   try {
     const { status, limit = 100 } = req.query;
@@ -170,9 +187,7 @@ exports.listAllTags = async (req, res) => {
   }
 };
 
-// ─────────────────────────────
-// RESET PASSWORD
-// ─────────────────────────────
+// ───────── RESET PASSWORD ─────────
 exports.resetAgentPassword = async (req, res) => {
   try {
     const { rows } = await query(
@@ -198,37 +213,10 @@ exports.resetAgentPassword = async (req, res) => {
   }
 };
 
-// ───────── AGENT DETAIL FIX ─────────
-exports.getAgentDetail = async (req, res) => {
-  try {
-    const { rows } = await query(`
-      SELECT 
-        a.id,
-        u.name,
-        u.phone,
-        a.business_name,
-        u.is_active
-      FROM agents a
-      JOIN users u ON u.id = a.user_id
-      WHERE a.id = $1
-    `, [req.params.id]);
-
-    if (!rows.length) return error(res, 'Agent not found', 404);
-
-    return success(res, rows[0]);
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Failed', 500);
-  }
-};
-
-// ───────── CATEGORIES ─────────
+// ───────── CATEGORIES (FINAL FIX) ─────────
 exports.getCategories = async (req, res) => {
   try {
-    const { rows } = await query(`
-      SELECT * FROM categories ORDER BY id DESC
-    `);
+    const { rows } = await query(`SELECT * FROM categories ORDER BY id DESC`);
     return success(res, rows);
   } catch (err) {
     logger.error(err);
@@ -238,15 +226,16 @@ exports.getCategories = async (req, res) => {
 
 exports.createCategory = async (req, res) => {
   try {
-    const { name, activation_price, subscription_price } = req.body;
+    const { name, yearly_price, premium_unlock_price } = req.body;
 
     const { rows } = await query(`
-      INSERT INTO categories (name, activation_price, subscription_price, is_active)
+      INSERT INTO categories (name, yearly_price, premium_unlock_price, is_active)
       VALUES ($1,$2,$3,true)
       RETURNING *
-    `, [name, activation_price, subscription_price]);
+    `, [name, yearly_price, premium_unlock_price]);
 
     return success(res, rows[0]);
+
   } catch (err) {
     logger.error(err);
     return error(res, 'Create failed', 500);
@@ -255,18 +244,19 @@ exports.createCategory = async (req, res) => {
 
 exports.updateCategory = async (req, res) => {
   try {
-    const { activation_price, subscription_price, is_active } = req.body;
+    const { yearly_price, premium_unlock_price, is_active } = req.body;
 
     const { rows } = await query(`
       UPDATE categories
-      SET activation_price=$1,
-          subscription_price=$2,
+      SET yearly_price=$1,
+          premium_unlock_price=$2,
           is_active=$3
       WHERE id=$4
       RETURNING *
-    `, [activation_price, subscription_price, is_active, req.params.id]);
+    `, [yearly_price, premium_unlock_price, is_active, req.params.id]);
 
     return success(res, rows[0]);
+
   } catch (err) {
     logger.error(err);
     return error(res, 'Update failed', 500);
