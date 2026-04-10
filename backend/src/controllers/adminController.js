@@ -49,11 +49,16 @@ exports.createAgent = async (req, res) => {
       return error(res, 'Name, Phone, Business Name required', 400);
     }
 
+    // 🔴 CRITICAL FIX: ensure admin exists
+    const adminId = req.user?.id;
+    if (!adminId) {
+      return error(res, 'Unauthorized: Admin not found in token', 401);
+    }
+
     phone = normalizePhone(phone);
 
     const tempPassword = `Vahan@${nanoid().slice(0, 6)}`;
     const hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
-    const adminId = req.user?.id || null;
 
     const result = await withTransaction(async (client) => {
 
@@ -77,7 +82,7 @@ exports.createAgent = async (req, res) => {
 
       const userId = userRows[0].id;
 
-      // Create agent (FULL FIX)
+      // Create agent (FINAL FIXED)
       const { rows: agentRows } = await client.query(
         `INSERT INTO agents (
           user_id,
@@ -99,7 +104,7 @@ exports.createAgent = async (req, res) => {
           clean(state),
           clean(address),
           userId,
-          adminId
+          adminId // ✅ NOW GUARANTEED NOT NULL
         ]
       );
 
@@ -145,7 +150,7 @@ exports.listAgents = async (req, res) => {
   }
 };
 
-// ───────── AGENT DETAIL (FINAL FIXED) ─────────
+// ───────── AGENT DETAIL ─────────
 exports.getAgentDetail = async (req, res) => {
   try {
     const id = req.params.id;

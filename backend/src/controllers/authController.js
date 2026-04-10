@@ -8,15 +8,14 @@ const { success, error } = require('../utils/response');
 const { sendOtp } = require('../services/smsService');
 
 // ─── CLEAN INPUT ─────────────────────────
-// ⚠️ DO NOT modify password content
 const clean = (v) => (typeof v === 'string' ? v.trim() : v);
 
-// ─── TOKENS ─────────────────────────
+// ─── TOKENS (🔥 STRICT + CONSISTENT) ─────────────────────────
 
 function generateAccessToken(user) {
   return jwt.sign(
     {
-      userId: user.userId || user.id,
+      userId: user.id,        // ✅ ALWAYS id → userId (NO fallback ambiguity)
       role: user.role
     },
     process.env.JWT_SECRET,
@@ -27,7 +26,7 @@ function generateAccessToken(user) {
 function generateRefreshToken(user) {
   return jwt.sign(
     {
-      userId: user.userId || user.id,
+      userId: user.id,        // ✅ SAME STRUCTURE
       role: user.role,
       tokenVersion: uuidv4()
     },
@@ -51,7 +50,7 @@ async function storeRefreshToken(userId, token) {
 exports.adminLogin = async (req, res, next) => {
   try {
     let email = clean(req.body.email);
-    const password = req.body.password; // ⚠️ raw password (no clean)
+    const password = req.body.password;
 
     if (!email || !password) {
       return error(res, 'Email and password required', 400);
@@ -65,7 +64,6 @@ exports.adminLogin = async (req, res, next) => {
     );
 
     if (!rows.length) {
-      console.log('❌ Admin not found:', email);
       return error(res, 'Invalid credentials', 401);
     }
 
@@ -74,17 +72,17 @@ exports.adminLogin = async (req, res, next) => {
     if (!user.is_active) return error(res, 'Account disabled', 403);
     if (!user.password_hash) return error(res, 'Password not set', 403);
 
-    console.log('📦 DB HASH:', user.password_hash);
-    console.log('📥 INPUT:', JSON.stringify(password));
-
     const valid = await bcrypt.compare(password, user.password_hash);
-
-    console.log('🔐 ADMIN PASSWORD MATCH:', valid);
-
     if (!valid) return error(res, 'Invalid credentials', 401);
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    // 🔥 ENSURE CORRECT STRUCTURE
+    const tokenUser = {
+      id: user.id,
+      role: 'admin'
+    };
+
+    const accessToken = generateAccessToken(tokenUser);
+    const refreshToken = generateRefreshToken(tokenUser);
 
     await storeRefreshToken(user.id, refreshToken);
 
@@ -128,13 +126,15 @@ exports.agentLogin = async (req, res, next) => {
     }
 
     const valid = await bcrypt.compare(password, user.password_hash);
-
-    console.log('🔐 AGENT PASSWORD MATCH:', valid);
-
     if (!valid) return error(res, 'Invalid credentials', 401);
 
-    const accessToken = generateAccessToken({ userId: user.id, role: 'agent' });
-    const refreshToken = generateRefreshToken({ userId: user.id, role: 'agent' });
+    const tokenUser = {
+      id: user.id,
+      role: 'agent'
+    };
+
+    const accessToken = generateAccessToken(tokenUser);
+    const refreshToken = generateRefreshToken(tokenUser);
 
     await storeRefreshToken(user.id, refreshToken);
 
@@ -224,62 +224,6 @@ exports.agentVerifyOtpAndSetPassword = async (req, res, next) => {
   }
 };
 
-// ─── USER OTP ─────────────────
-
-exports.requestOtp = async (req, res, next) => {
-  try {
-    const phone = clean(req.body.phone);
-
-    if (!phone) return error(res, 'Phone required', 400);
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const hash = await bcrypt.hash(otp, 10);
-
-    await query(
-      `INSERT INTO otp_attempts (phone, otp_hash, expires_at, used)
-       VALUES ($1,$2,NOW()+INTERVAL '10 minutes', false)`,
-      [phone, hash]
-    );
-
-    await sendOtp(phone, otp);
-
-    return success(res, {}, 'OTP sent');
-
-  } catch (err) {
-    next(err);
-  }
-};
-
-// ─── VERIFY OTP ─────────────────
-
-exports.verifyOtp = async (req, res, next) => {
-  try {
-    const phone = clean(req.body.phone);
-    const otp = clean(req.body.otp);
-
-    if (!phone || !otp) return error(res, 'Phone & OTP required', 400);
-
-    const { rows } = await query(
-      `SELECT * FROM otp_attempts
-       WHERE phone=$1 AND used=false AND expires_at>NOW()
-       ORDER BY created_at DESC LIMIT 1`,
-      [phone]
-    );
-
-    if (!rows.length) return error(res, 'OTP expired', 400);
-
-    const valid = await bcrypt.compare(otp, rows[0].otp_hash);
-    if (!valid) return error(res, 'Invalid OTP', 400);
-
-    await query(`UPDATE otp_attempts SET used=true WHERE id=$1`, [rows[0].id]);
-
-    return success(res, {}, 'OTP verified');
-
-  } catch (err) {
-    next(err);
-  }
-};
-
 // ─── REFRESH TOKEN ─────────────────
 
 exports.refreshToken = async (req, res) => {
@@ -290,11 +234,14 @@ exports.refreshToken = async (req, res) => {
 
     const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
 
-    // 🔥 generate new tokens
-    const accessToken = generateAccessToken(decoded);
-    const newRefreshToken = generateRefreshToken(decoded);
+    const tokenUser = {
+      id: decoded.userId,
+      role: decoded.role
+    };
 
-    // 🔥 store new refresh token
+    const accessToken = generateAccessToken(tokenUser);
+    const newRefreshToken = generateRefreshToken(tokenUser);
+
     await storeRefreshToken(decoded.userId, newRefreshToken);
 
     return success(res, {
