@@ -134,6 +134,7 @@ console.log('📌 Mounting routes...');
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/agents', agentRoutes);
+app.use('/api/agent', agentRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/scan', scanRoutes);
 app.use('/api/cron', cronRoutes);
