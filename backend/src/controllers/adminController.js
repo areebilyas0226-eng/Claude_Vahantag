@@ -114,10 +114,10 @@ exports.createAgent = async (req, res) => {
     sendSms(phone, `Login ID: ${result.userId} Password: ${tempPassword}`).catch(() => {});
 
     return success(res, {
-      agent: result.agent,
-      loginId: result.userId,
-      tempPassword
-    });
+    agent: result.agent,
+    loginId: result.agent.generated_user_id,
+    tempPassword
+});
 
   } catch (err) {
     logger.error(err);
