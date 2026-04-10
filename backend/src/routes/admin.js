@@ -1,120 +1,207 @@
-'use strict';
+import axios from 'axios';
+import * as SecureStore from 'expo-secure-store';
 
-const express = require('express');
-const { body, param, query } = require('express-validator');
+const BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  'https://claudevahantag-production.up.railway.app/api';
 
-const router = express.Router();
+const api = axios.create({
+  baseURL: BASE_URL,
+  timeout: 20000,
+  headers: { 'Content-Type': 'application/json' },
+});
 
-const adminController = require('../controllers/adminController');
-const tagController = require('../controllers/tagController');
-
-const { authenticate, requireRole } = require('../middleware/auth');
-const { validate } = require('../middleware/validate');
-
-// 🔐 Protect all routes
-router.use(authenticate, requireRole('admin'));
-
-// ───────── SAFE WRAPPER ─────────
-function safe(handler) {
-  return async (req, res, next) => {
+// ── REQUEST: attach token ─────────────────────────────────────────
+api.interceptors.request.use(
+  async (config) => {
     try {
-      await handler(req, res, next);
-    } catch (err) {
-      console.error('❌ ADMIN ERROR:', err);
-      next(err);
+      const token = await SecureStore.getItemAsync('adminAccessToken');
+      if (token) {
+        config.headers = config.headers || {};
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch {}
+
+    // 🔥 DEBUG LOG
+    if (config.method === 'post') {
+      console.log('🚀 API:', config.url);
+      console.log('📦 PAYLOAD:', config.data);
     }
-  };
-}
 
-// ───────── ANALYTICS ─────────
-router.get('/analytics', safe(adminController.getAnalytics));
-
-// ───────── AGENTS ─────────
-router.get('/agents', safe(adminController.listAgents));
-
-router.get(
-  '/agents/:id',
-  [
-    param('id').isInt(),
-    validate
-  ],
-  safe(adminController.getAgentDetail)
+    return config;
+  },
+  (err) => Promise.reject(err)
 );
 
-router.post(
-  '/agents',
-  [
-    body('name').notEmpty(),
-    body('phone').notEmpty(),
-    body('businessName').notEmpty(),
-    validate
-  ],
-  safe(adminController.createAgent)
+// ── RESPONSE: handle 401 ─────────────────────────────────────────
+api.interceptors.response.use(
+  (res) => res,
+  async (err) => {
+    console.log('❌ API ERROR:', err?.response?.data || err.message);
+
+    if (err?.response?.status === 401) {
+      try {
+        await SecureStore.deleteItemAsync('adminAccessToken');
+        await SecureStore.deleteItemAsync('adminRefreshToken');
+        await SecureStore.deleteItemAsync('adminUser');
+      } catch {}
+
+      if (typeof global.logout === 'function') {
+        global.logout();
+      }
+    }
+
+    return Promise.reject(err);
+  }
 );
 
-// ───────── CATEGORIES (FINAL FIX) ─────────
-router.get('/categories', safe(adminController.getCategories));
+// ── NORMALIZER ───────────────────────────────────────────────────
+const norm = (res) => res?.data?.data ?? res?.data ?? null;
+const normArr = (res) => {
+  const d = norm(res);
+  return Array.isArray(d) ? d : [];
+};
 
-router.post(
-  '/categories',
-  [
-    body('name').notEmpty(),
-    body('yearly_price').isNumeric(),
-    body('premium_unlock_price').optional().isNumeric(),
-    validate
-  ],
-  safe(adminController.createCategory)
-);
+// ── ANALYTICS ────────────────────────────────────────────────────
+export const getDashboardStats = async () => {
+  try {
+    const res = await api.get('/admin/analytics');
+    const d = norm(res);
 
-router.put(
-  '/categories/:id',
-  [
-    param('id').isInt(),
-    body('yearly_price').isNumeric(),
-    body('premium_unlock_price').optional().isNumeric(),
-    body('is_active').isBoolean(),
-    validate
-  ],
-  safe(adminController.updateCategory)
-);
+    return {
+      totalTags: Number(d?.totalTags ?? 0),
+      activeTags: Number(d?.activeTags ?? 0),
+      expiredTags: Number(d?.expiredTags ?? 0),
+      agents: Number(d?.activeAgents ?? d?.agents ?? 0),
+      revenue: Number(d?.revenue ?? 0),
+      scans: Number(d?.totalScans ?? d?.scans ?? 0),
+      orders: Number(d?.totalOrders ?? 0),
+    };
+  } catch {
+    return null;
+  }
+};
 
-// ───────── ORDERS ─────────
-router.get(
-  '/orders',
-  [
-    query('status').optional().isString(),
-    validate
-  ],
-  safe(adminController.listOrders)
-);
+// ── AGENTS ───────────────────────────────────────────────────────
+export const getAgents = async () => {
+  try {
+    const res = await api.get('/admin/agents?limit=200');
+    return normArr(res);
+  } catch {
+    return [];
+  }
+};
 
-// ───────── TAGS ─────────
-router.get(
-  '/tags',
-  [
-    query('status').optional().isString(),
-    validate
-  ],
-  safe(adminController.listAllTags)
-);
+export const getAgentDetail = async (id) => {
+  try {
+    const res = await api.get(`/admin/agents/${id}`);
+    return norm(res);
+  } catch {
+    return null;
+  }
+};
 
-router.post(
-  '/tags/generate',
-  [
-    body('orderId').isInt(),
-    validate
-  ],
-  safe(tagController.generateTagsForOrder)
-);
+// ── CREATE AGENT (🔥 FINAL FIXED) ────────────────────────────────
+export const createAgent = async (payload) => {
+  try {
+    // ✅ FORCE FULL STRUCTURE (NO DATA LOSS)
+    const body = {
+      name: payload.name || '',
+      phone: payload.phone || '',
+      businessName: payload.businessName || '',
+      ownerName: payload.ownerName || '',
+      city: payload.city || '',
+      state: payload.state || '',
+      address: payload.address || '',
+    };
 
-// ───────── SUBSCRIPTIONS ─────────
-router.get(
-  '/subscriptions',
-  [
-    query('status').optional().isString(),
-    validate
-  ],
-  safe(adminController.getSubscriptions)
-);
+    console.log('📦 FINAL BODY:', body);
 
-module.exports = router;
+    // ✅ CORRECT ENDPOINT
+    const res = await api.post('/admin/agents', body);
+
+    return norm(res);
+  } catch (err) {
+    console.log('❌ CREATE AGENT FAILED:', err?.response?.data || err.message);
+    throw err;
+  }
+};
+
+// ── ORDERS ───────────────────────────────────────────────────────
+export const getOrders = async (status = '') => {
+  try {
+    const url = status
+      ? `/admin/orders?status=${status}`
+      : '/admin/orders?limit=100';
+
+    const res = await api.get(url);
+    return normArr(res);
+  } catch {
+    return [];
+  }
+};
+
+export const generateTags = async (orderId) => {
+  const res = await api.post('/admin/tags/generate', { orderId });
+  return norm(res);
+};
+
+// ── TAGS ─────────────────────────────────────────────────────────
+export const getTags = async (params = {}) => {
+  try {
+    const q = new URLSearchParams({ limit: 50, ...params }).toString();
+    const res = await api.get(`/admin/tags?${q}`);
+
+    const raw = res?.data;
+
+    return {
+      tags: Array.isArray(raw?.data) ? raw.data : [],
+      total: raw?.pagination?.total ?? raw?.data?.length ?? 0,
+    };
+  } catch {
+    return { tags: [], total: 0 };
+  }
+};
+
+// ── CATEGORIES ───────────────────────────────────────────────────
+export const getCategories = async () => {
+  try {
+    const res = await api.get('/admin/categories');
+    return normArr(res);
+  } catch {
+    return [];
+  }
+};
+
+export const createCategory = async (payload) => {
+  const res = await api.post('/admin/categories', payload);
+  return norm(res);
+};
+
+export const updateCategory = async (id, payload) => {
+  const res = await api.put(`/admin/categories/${id}`, payload);
+  return norm(res);
+};
+
+// ── SUBSCRIPTIONS ────────────────────────────────────────────────
+export const getSubscriptions = async (status = 'active') => {
+  try {
+    const res = await api.get(`/admin/subscriptions?status=${status}`);
+    return normArr(res);
+  } catch {
+    return [];
+  }
+};
+
+// ── USERS ────────────────────────────────────────────────────────
+export const getUsers = async () => {
+  try {
+    const res = await api.get('/admin/users?limit=100');
+    return normArr(res);
+  } catch {
+    return [];
+  }
+};
+
+export { BASE_URL };
+export default api;
