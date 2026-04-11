@@ -6,7 +6,6 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { authenticate, requireRole } = require('../middleware/auth');
 
-// 🔥 GLOBAL GUARD (applies to ALL routes below)
 router.use(authenticate);
 router.use(requireRole('admin'));
 
@@ -15,11 +14,13 @@ router.get('/analytics', adminController.getAnalytics);
 
 // ───────── AGENTS ─────────
 router.post('/agents', adminController.createAgent);
-
 router.get('/agents', adminController.listAgents);
-
 router.get('/agents/:id', adminController.getAgentDetail);
-
 router.post('/agents/:id/reset-password', adminController.resetAgentPassword);
+
+// ───────── 🔥 CATEGORY ─────────
+router.get('/category', adminController.getCategories);
+router.post('/category', adminController.createCategory);
+router.put('/category/:id', adminController.updateCategory);
 
 module.exports = router;

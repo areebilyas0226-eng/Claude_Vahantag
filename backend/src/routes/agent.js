@@ -60,4 +60,7 @@ router.get('/tags', agentController.getTags);
 // ─────────────────────────────────────────
 router.get('/sales', agentController.getSales);
 
+// 🔥 CATEGORY (FOR AGENT APP)
+router.get('/category', agentController.getCategories);
+
 module.exports = router;

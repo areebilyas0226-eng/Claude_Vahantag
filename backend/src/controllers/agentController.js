@@ -250,3 +250,19 @@ exports.getSales = async (req, res, next) => {
     next(err);
   }
 };
+
+// ───────── GET CATEGORIES (AGENT) ─────────
+exports.getCategories = async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT id, name, yearly_price, premium_unlock_price
+       FROM tag_categories
+       WHERE is_active = true
+       ORDER BY name ASC`
+    );
+
+    return success(res, rows);
+  } catch (err) {
+    next(err);
+  }
+};

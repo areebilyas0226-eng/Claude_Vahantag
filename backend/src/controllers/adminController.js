@@ -207,3 +207,74 @@ exports.resetAgentPassword = async (req, res) => {
     return error(res, 'Failed', 500);
   }
 };
+
+// ───────── CATEGORY ─────────
+
+// GET ALL
+exports.getCategories = async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT * FROM tag_categories ORDER BY created_at DESC`
+    );
+
+    return success(res, rows);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed to fetch categories', 500);
+  }
+};
+
+// CREATE
+exports.createCategory = async (req, res) => {
+  try {
+    const { name, yearly_price, premium_unlock_price, is_active } = req.body;
+
+    if (!name || !yearly_price) {
+      return error(res, 'Name & price required', 400);
+    }
+
+    const slug = name.toLowerCase().replace(/\s+/g, '-');
+
+    const { rows } = await query(
+      `INSERT INTO tag_categories 
+      (name, slug, yearly_price, premium_unlock_price, is_active)
+      VALUES ($1,$2,$3,$4,$5)
+      RETURNING *`,
+      [
+        name.trim(),
+        slug,
+        yearly_price,
+        premium_unlock_price || null,
+        is_active ?? true
+      ]
+    );
+
+    return success(res, rows[0]);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Create failed', 500);
+  }
+};
+
+// UPDATE
+exports.updateCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { yearly_price, premium_unlock_price, is_active } = req.body;
+
+    const { rows } = await query(
+      `UPDATE tag_categories
+       SET yearly_price=$1,
+           premium_unlock_price=$2,
+           is_active=$3
+       WHERE id=$4
+       RETURNING *`,
+      [yearly_price, premium_unlock_price, is_active, id]
+    );
+
+    return success(res, rows[0]);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Update failed', 500);
+  }
+};
