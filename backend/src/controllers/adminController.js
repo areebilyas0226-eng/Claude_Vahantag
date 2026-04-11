@@ -13,25 +13,21 @@ const SALT_ROUNDS = 10;
 const normalizePhone = (p) => String(p || '').replace(/\D/g, '');
 const clean = (v) => (v && String(v).trim() ? String(v).trim() : null);
 
-// ───────── ANALYTICS ─────────
+// ───────── ANALYTICS (🔥 FIXED) ─────────
 exports.getAnalytics = async (req, res) => {
   try {
     const revenueRes = await query(`SELECT COALESCE(SUM(amount),0) AS total FROM payments`);
     const scans = await query(`SELECT COUNT(*) AS total FROM scans`);
     const tags = await query(`SELECT COUNT(*) AS total FROM tags`);
-
-    const agents = await query(`
-      SELECT COUNT(*) AS total
-      FROM agents a
-      JOIN users u ON u.id = a.user_id
-      WHERE COALESCE(u.is_active,true) = true
-    `);
+    const agents = await query(`SELECT COUNT(*) AS total FROM agents`);
+    const orders = await query(`SELECT COUNT(*) AS total FROM tag_orders`);
 
     return success(res, {
       revenue: Number(revenueRes.rows[0]?.total || 0),
       totalScans: Number(scans.rows[0]?.total || 0),
       totalTags: Number(tags.rows[0]?.total || 0),
-      activeAgents: Number(agents.rows[0]?.total || 0),
+      activeAgents: Number(agents.rows[0]?.total || 0), // ✅ FIXED
+      totalOrders: Number(orders.rows[0]?.total || 0),
     });
 
   } catch (err) {
@@ -40,7 +36,7 @@ exports.getAnalytics = async (req, res) => {
   }
 };
 
-// ───────── CREATE AGENT (FINAL FIXED) ─────────
+// ───────── CREATE AGENT ─────────
 exports.createAgent = async (req, res) => {
   try {
     let { name, phone, businessName, city, state, address, ownerName } = req.body;
@@ -49,10 +45,9 @@ exports.createAgent = async (req, res) => {
       return error(res, 'Name, Phone, Business Name required', 400);
     }
 
-    // 🔴 CRITICAL FIX: ensure admin exists
     const adminId = req.user?.id;
     if (!adminId) {
-      return error(res, 'Unauthorized: Admin not found in token', 401);
+      return error(res, 'Unauthorized', 401);
     }
 
     phone = normalizePhone(phone);
@@ -62,7 +57,6 @@ exports.createAgent = async (req, res) => {
 
     const result = await withTransaction(async (client) => {
 
-      // Duplicate check
       const { rows: existing } = await client.query(
         `SELECT id FROM users WHERE phone=$1`,
         [phone]
@@ -72,7 +66,6 @@ exports.createAgent = async (req, res) => {
         throw { message: 'Phone already exists', statusCode: 409 };
       }
 
-      // Create user
       const { rows: userRows } = await client.query(
         `INSERT INTO users (name, phone, password_hash, role, is_active)
          VALUES ($1,$2,$3,'agent',true)
@@ -82,7 +75,6 @@ exports.createAgent = async (req, res) => {
 
       const userId = userRows[0].id;
 
-      // Create agent (FINAL FIXED)
       const { rows: agentRows } = await client.query(
         `INSERT INTO agents (
           user_id,
@@ -104,7 +96,7 @@ exports.createAgent = async (req, res) => {
           clean(state),
           clean(address),
           userId,
-          adminId // ✅ NOW GUARANTEED NOT NULL
+          adminId
         ]
       );
 
@@ -114,10 +106,10 @@ exports.createAgent = async (req, res) => {
     sendSms(phone, `Login ID: ${result.userId} Password: ${tempPassword}`).catch(() => {});
 
     return success(res, {
-    agent: result.agent,
-    loginId: result.agent.generated_user_id,
-    tempPassword
-});
+      agent: result.agent,
+      loginId: result.agent.generated_user_id,
+      tempPassword
+    });
 
   } catch (err) {
     logger.error(err);
@@ -125,7 +117,7 @@ exports.createAgent = async (req, res) => {
   }
 };
 
-// ───────── LIST AGENTS ─────────
+// ───────── LIST AGENTS (🔥 FIXED) ─────────
 exports.listAgents = async (req, res) => {
   try {
     const { rows } = await query(`
@@ -136,7 +128,7 @@ exports.listAgents = async (req, res) => {
         u.phone,
         a.business_name,
         a.owner_name,
-        COALESCE(u.is_active,true) AS is_active
+        COALESCE(u.is_active, true) AS is_active
       FROM agents a
       JOIN users u ON u.id = a.user_id
       ORDER BY a.id DESC
@@ -166,7 +158,7 @@ exports.getAgentDetail = async (req, res) => {
         a.city,
         a.state,
         a.address,
-        u.is_active
+        COALESCE(u.is_active, true) AS is_active
       FROM agents a
       JOIN users u ON u.id = a.user_id
       WHERE a.user_id = $1
@@ -210,7 +202,7 @@ exports.resetAgentPassword = async (req, res) => {
 
 // ───────── CATEGORY ─────────
 
-// GET ALL
+// GET
 exports.getCategories = async (req, res) => {
   try {
     const { rows } = await query(
@@ -243,8 +235,8 @@ exports.createCategory = async (req, res) => {
       [
         name.trim(),
         slug,
-        yearly_price,
-        premium_unlock_price || null,
+        Number(yearly_price),
+        premium_unlock_price ? Number(premium_unlock_price) : null,
         is_active ?? true
       ]
     );
@@ -269,7 +261,12 @@ exports.updateCategory = async (req, res) => {
            is_active=$3
        WHERE id=$4
        RETURNING *`,
-      [yearly_price, premium_unlock_price, is_active, id]
+      [
+        Number(yearly_price),
+        premium_unlock_price ? Number(premium_unlock_price) : null,
+        is_active,
+        id
+      ]
     );
 
     return success(res, rows[0]);
