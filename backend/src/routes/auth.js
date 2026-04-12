@@ -10,18 +10,6 @@ const { authenticate } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { otpLimiter, authLimiter } = require('../middleware/rateLimiter');
 
-// ✅ HARD GUARD (prevents undefined crash)
-const safe = (fn, name) => {
-  if (typeof fn !== 'function') {
-    console.error(`❌ Missing controller: ${name}`);
-    return (req, res) => res.status(500).json({
-      success: false,
-      message: `Server misconfigured: ${name} missing`
-    });
-  }
-  return fn;
-};
-
 // ─── ADMIN LOGIN ─────────────────────
 router.post(
   '/admin/login',
@@ -31,7 +19,7 @@ router.post(
     body('password').notEmpty().withMessage('Password required')
   ],
   validate,
-  safe(authController.adminLogin, 'adminLogin')
+  authController.adminLogin
 );
 
 // ─── AGENT LOGIN ─────────────────────
@@ -43,10 +31,10 @@ router.post(
     body('password').notEmpty().withMessage('Password required')
   ],
   validate,
-  safe(authController.agentLogin, 'agentLogin')
+  authController.agentLogin
 );
 
-// ─── AGENT OTP FLOW ─────────────────────
+// ─── AGENT OTP FLOW (✅ CORRECT)
 router.post(
   '/agent/request-otp',
   otpLimiter,
@@ -54,7 +42,7 @@ router.post(
     body('generatedUserId').notEmpty().withMessage('User ID required')
   ],
   validate,
-  safe(authController.agentRequestOtp, 'agentRequestOtp')
+  authController.agentRequestOtp
 );
 
 router.post(
@@ -66,35 +54,7 @@ router.post(
     body('password').isLength({ min: 6 })
   ],
   validate,
-  safe(authController.agentVerifyOtpAndSetPassword, 'agentVerifyOtpAndSetPassword')
-);
-
-// ─── USER OTP LOGIN FLOW ─────────────────────
-router.post(
-  '/user/request-otp',
-  otpLimiter,
-  [
-    body('phone')
-      .matches(/^[6-9]\d{9}$/)
-      .withMessage('Valid Indian phone number required')
-  ],
-  validate,
-  safe(authController.requestOtp, 'requestOtp')
-);
-
-router.post(
-  '/user/verify-otp',
-  otpLimiter,
-  [
-    body('phone')
-      .matches(/^[6-9]\d{9}$/)
-      .withMessage('Valid phone required'),
-    body('otp')
-      .isLength({ min: 6, max: 6 })
-      .withMessage('OTP must be 6 digits')
-  ],
-  validate,
-  safe(authController.verifyOtp, 'verifyOtp')
+  authController.agentVerifyOtpAndSetPassword
 );
 
 // ─── TOKEN REFRESH ─────────────────────
@@ -104,14 +64,14 @@ router.post(
     body('refreshToken').notEmpty().withMessage('Refresh token required')
   ],
   validate,
-  safe(authController.refreshToken, 'refreshToken')
+  authController.refreshToken
 );
 
 // ─── LOGOUT ─────────────────────
 router.post(
   '/logout',
   authenticate,
-  safe(authController.logout, 'logout')
+  authController.logout
 );
 
 module.exports = router;
