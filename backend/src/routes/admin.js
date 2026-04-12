@@ -6,7 +6,7 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { authenticate, requireRole } = require('../middleware/auth');
 
-// 🔐 PROTECTED (ADMIN ONLY)
+// 🔐 PROTECTED
 router.use(authenticate);
 router.use(requireRole('admin'));
 
@@ -19,15 +19,8 @@ router.get('/agents', adminController.listAgents);
 router.get('/agents/:id', adminController.getAgentDetail);
 router.post('/agents/:id/reset-password', adminController.resetAgentPassword);
 
-// ───────── ORDERS ─────────
+// ───────── ORDERS (SAFE ONLY) ─────────
 router.get('/orders', adminController.getOrders);
-router.post('/orders/:id/generate', adminController.generateTags);
-
-// ───────── TAGS ─────────
-router.get('/tags', adminController.getTags);
-
-// ⚠️ TEMP REMOVED (controller not implemented yet)
-// router.get('/tags/download/:orderId', adminController.downloadTagsPdf);
 
 // ───────── CATEGORY ─────────
 router.get('/category', adminController.getCategories);
