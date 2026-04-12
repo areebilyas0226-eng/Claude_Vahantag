@@ -19,21 +19,15 @@ router.get('/agents', adminController.listAgents);
 router.get('/agents/:id', adminController.getAgentDetail);
 router.post('/agents/:id/reset-password', adminController.resetAgentPassword);
 
-// ───────── ORDERS (🔥 CRITICAL) ─────────
-
-// GET ALL ORDERS (with optional filters)
+// ───────── ORDERS ─────────
 router.get('/orders', adminController.getOrders);
-
-// GENERATE TAGS FOR ORDER
 router.post('/orders/:id/generate', adminController.generateTags);
 
-// ───────── TAGS (🔥 REQUIRED) ─────────
-
-// GET TAGS (optional filter: agentId)
+// ───────── TAGS ─────────
 router.get('/tags', adminController.getTags);
 
-// DOWNLOAD QR PDF
-router.get('/tags/download/:orderId', adminController.downloadTagsPdf);
+// ⚠️ TEMP REMOVED (controller not implemented yet)
+// router.get('/tags/download/:orderId', adminController.downloadTagsPdf);
 
 // ───────── CATEGORY ─────────
 router.get('/category', adminController.getCategories);
