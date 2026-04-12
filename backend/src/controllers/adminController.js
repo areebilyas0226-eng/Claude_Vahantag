@@ -13,17 +13,13 @@ const SALT_ROUNDS = 10;
 const normalizePhone = (p) => String(p || '').replace(/\D/g, '');
 const clean = (v) => (v && String(v).trim() ? String(v).trim() : null);
 
-//
 // ───────── ANALYTICS ─────────
-//
 exports.getAnalytics = async (req, res) => {
   try {
     const revenueRes = await query(`SELECT COALESCE(SUM(amount),0) AS total FROM payments`);
     const scans = await query(`SELECT COUNT(*) AS total FROM scans`);
-
     const totalTags = await query(`SELECT COUNT(*) FROM tags`);
     const activeTags = await query(`SELECT COUNT(*) FROM tags WHERE status='active'`);
-
     const agents = await query(`SELECT COUNT(*) FROM agents`);
     const orders = await query(`SELECT COUNT(*) FROM tag_orders`);
 
@@ -42,9 +38,7 @@ exports.getAnalytics = async (req, res) => {
   }
 };
 
-//
 // ───────── CREATE AGENT ─────────
-//
 exports.createAgent = async (req, res) => {
   try {
     let { name, phone, businessName, city, state, address, ownerName } = req.body;
@@ -117,9 +111,7 @@ exports.createAgent = async (req, res) => {
   }
 };
 
-//
 // ───────── LIST AGENTS ─────────
-//
 exports.listAgents = async (req, res) => {
   try {
     const { rows } = await query(`
@@ -143,9 +135,7 @@ exports.listAgents = async (req, res) => {
   }
 };
 
-//
-// ───────── AGENT DETAIL (🔥 FIXED CORE) ─────────
-//
+// ───────── AGENT DETAIL ─────────
 exports.getAgentDetail = async (req, res) => {
   try {
     const userId = req.params.id;
@@ -192,29 +182,9 @@ exports.getAgentDetail = async (req, res) => {
   }
 };
 
-//
-// ───────── GET ORDERS (🔥 FILTERABLE) ─────────
-//
+// ───────── GET ORDERS ─────────
 exports.getOrders = async (req, res) => {
   try {
-    const { agentId, status } = req.query;
-
-    let where = [];
-    let values = [];
-    let i = 1;
-
-    if (agentId) {
-      where.push(`o.agent_id = $${i++}`);
-      values.push(agentId);
-    }
-
-    if (status) {
-      where.push(`o.status = $${i++}`);
-      values.push(status);
-    }
-
-    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-
     const { rows } = await query(`
       SELECT 
         o.*,
@@ -222,9 +192,8 @@ exports.getOrders = async (req, res) => {
       FROM tag_orders o
       JOIN agents a ON a.id = o.agent_id
       JOIN users u ON u.id = a.user_id
-      ${whereClause}
       ORDER BY o.created_at DESC
-    `, values);
+    `);
 
     return success(res, rows);
 
@@ -234,68 +203,7 @@ exports.getOrders = async (req, res) => {
   }
 };
 
-//
-// ───────── GENERATE TAGS (ADMIN CONTROL) ─────────
-//
-exports.generateTags = async (req, res) => {
-  try {
-    const orderId = req.params.id;
-
-    const { rows } = await query(
-      `SELECT * FROM tag_orders WHERE id=$1`,
-      [orderId]
-    );
-
-    if (!rows.length) return error(res, 'Order not found', 404);
-
-    await query(
-      `UPDATE tag_orders SET status='fulfilled' WHERE id=$1`,
-      [orderId]
-    );
-
-    return success(res, {
-      generated: rows[0].qty_generated || 0
-    });
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Generation failed', 500);
-  }
-};
-
-//
-// ───────── GET TAGS ─────────
-//
-exports.getTags = async (req, res) => {
-  try {
-    const { agentId } = req.query;
-
-    let where = '';
-    let values = [];
-
-    if (agentId) {
-      where = 'WHERE agent_id = $1';
-      values.push(agentId);
-    }
-
-    const { rows } = await query(`
-      SELECT id, qr_code, status, agent_id
-      FROM tags
-      ${where}
-      ORDER BY created_at DESC
-    `, values);
-
-    return success(res, rows);
-
-  } catch (err) {
-    logger.error(err);
-    return error(res, 'Failed to fetch tags', 500);
-  }
-};
-
-//
 // ───────── RESET PASSWORD ─────────
-//
 exports.resetAgentPassword = async (req, res) => {
   try {
     const { rows } = await query(
@@ -318,5 +226,58 @@ exports.resetAgentPassword = async (req, res) => {
   } catch (err) {
     logger.error(err);
     return error(res, 'Failed', 500);
+  }
+};
+
+// ───────── CATEGORY (🔥 ADDED TO FIX CRASH) ─────────
+exports.getCategories = async (req, res) => {
+  try {
+    const { rows } = await query(`SELECT * FROM tag_categories ORDER BY created_at DESC`);
+    return success(res, rows);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Failed', 500);
+  }
+};
+
+exports.createCategory = async (req, res) => {
+  try {
+    const { name, yearly_price } = req.body;
+
+    if (!name || !yearly_price) {
+      return error(res, 'Name & price required', 400);
+    }
+
+    const { rows } = await query(
+      `INSERT INTO tag_categories (name, yearly_price)
+       VALUES ($1,$2)
+       RETURNING *`,
+      [name.trim(), Number(yearly_price)]
+    );
+
+    return success(res, rows[0]);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Create failed', 500);
+  }
+};
+
+exports.updateCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { yearly_price } = req.body;
+
+    const { rows } = await query(
+      `UPDATE tag_categories
+       SET yearly_price=$1
+       WHERE id=$2
+       RETURNING *`,
+      [Number(yearly_price), id]
+    );
+
+    return success(res, rows[0]);
+  } catch (err) {
+    logger.error(err);
+    return error(res, 'Update failed', 500);
   }
 };
