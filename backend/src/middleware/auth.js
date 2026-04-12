@@ -4,20 +4,28 @@ const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 const { error } = require('../utils/response');
 
-/**
- * Verify access token and attach user to req.user.
- */
+//
+// ─────────────────────────────────────────
+// AUTHENTICATE
+// ─────────────────────────────────────────
+//
 async function authenticate(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
 
+    // ✅ STRICT CHECK
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return error(res, 'Access token required', 401);
     }
 
-    const token = authHeader.slice(7);
+    const token = authHeader.split(' ')[1]?.trim();
+
+    if (!token) {
+      return error(res, 'Invalid authorization format', 401);
+    }
 
     let decoded;
+
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtErr) {
@@ -28,18 +36,30 @@ async function authenticate(req, res, next) {
       );
     }
 
-    // 🔥 FINAL FIX: support all possible token structures
+    // ✅ SUPPORT MULTIPLE TOKEN STRUCTURES
     const userId = decoded.userId || decoded.id || decoded._id;
 
     if (!userId) {
-      return error(res, 'Invalid token payload (no userId)', 401);
+      return error(res, 'Invalid token payload', 401);
     }
 
-    // Fetch fresh user from DB
+    //
+    // 🔥 FIX: PROPER JOIN WITH AGENT
+    //
     const { rows } = await query(
-      `SELECT id, role, name, email, phone, is_active, agent_id 
-       FROM users 
-       WHERE id = $1`,
+      `
+      SELECT 
+        u.id,
+        u.role,
+        u.name,
+        u.email,
+        u.phone,
+        u.is_active,
+        a.id AS agent_id
+      FROM users u
+      LEFT JOIN agents a ON a.user_id = u.id
+      WHERE u.id = $1
+      `,
       [userId]
     );
 
@@ -47,11 +67,15 @@ async function authenticate(req, res, next) {
       return error(res, 'Account not found or deactivated', 401);
     }
 
-    // ✅ Attach user to request
-    req.user = rows[0];
-
-    // 🔍 DEBUG (remove later)
-    console.log('✅ AUTH USER:', req.user);
+    // ✅ CLEAN USER OBJECT
+    req.user = {
+      id: rows[0].id,
+      role: rows[0].role,
+      name: rows[0].name,
+      email: rows[0].email,
+      phone: rows[0].phone,
+      agent_id: rows[0].agent_id || null,
+    };
 
     next();
 
@@ -61,12 +85,16 @@ async function authenticate(req, res, next) {
   }
 }
 
-/**
- * Role-based guard
- */
+//
+// ─────────────────────────────────────────
+// ROLE GUARD
+// ─────────────────────────────────────────
+//
 function requireRole(...roles) {
   return (req, res, next) => {
-    if (!req.user) return error(res, 'Not authenticated', 401);
+    if (!req.user) {
+      return error(res, 'Not authenticated', 401);
+    }
 
     if (!roles.includes(req.user.role)) {
       return error(
@@ -80,9 +108,11 @@ function requireRole(...roles) {
   };
 }
 
-/**
- * Cron protection
- */
+//
+// ─────────────────────────────────────────
+// CRON SECURITY
+// ─────────────────────────────────────────
+//
 function requireCronSecret(req, res, next) {
   const secret = req.headers['x-cron-secret'];
 
@@ -93,4 +123,8 @@ function requireCronSecret(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, requireRole, requireCronSecret };
+module.exports = {
+  authenticate,
+  requireRole,
+  requireCronSecret,
+};

@@ -12,14 +12,18 @@ const { validate } = require('../middleware/validate');
 // 🔐 Protected (Agent only)
 router.use(authenticate, requireRole('agent'));
 
+//
 // ─────────────────────────────────────────
 // INVENTORY
 // ─────────────────────────────────────────
+//
 router.get('/inventory', agentController.getInventory);
 
+//
 // ─────────────────────────────────────────
-// PLACE ORDER (MULTI CATEGORY)
+// PLACE ORDER (FIXED)
 // ─────────────────────────────────────────
+//
 router.post(
   '/orders',
   [
@@ -32,35 +36,47 @@ router.post(
       .withMessage('Valid category ID required'),
 
     body('items.*.quantity')
-      .isInt({ min: 1, max: 10000 })
-      .withMessage('Quantity must be between 1-10000'),
+      .isInt({ min: 1, max: 5000 }) // 🔥 reduced for safety
+      .withMessage('Quantity must be between 1-5000'),
 
-    body('items.*.notes')
+    // ✅ FIX: notes at ROOT
+    body('notes')
       .optional()
       .isString()
-      .isLength({ max: 500 }),
+      .isLength({ max: 500 })
+      .withMessage('Notes must be max 500 chars'),
 
     validate,
   ],
   agentController.placeOrder
 );
 
+//
 // ─────────────────────────────────────────
 // GET ORDERS
 // ─────────────────────────────────────────
+//
 router.get('/orders', agentController.getOrders);
 
+//
 // ─────────────────────────────────────────
 // GET TAGS
 // ─────────────────────────────────────────
+//
 router.get('/tags', agentController.getTags);
 
+//
 // ─────────────────────────────────────────
 // SALES
 // ─────────────────────────────────────────
+//
 router.get('/sales', agentController.getSales);
 
-// 🔥 CATEGORY (FOR AGENT APP)
-router.get('/category', agentController.getCategories);
+//
+// ─────────────────────────────────────────
+// CATEGORY (FOR AGENT APP)
+// ─────────────────────────────────────────
+//
+router.get('/categories', agentController.getCategories); // 🔥 FIXED plural
 
 module.exports = router;

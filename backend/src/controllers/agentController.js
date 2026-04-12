@@ -1,12 +1,14 @@
 'use strict';
 
-const { query } = require('../config/db');
+const { query, withTransaction } = require('../config/db'); // ✅ FIX
 const { success, error } = require('../utils/response');
 const crypto = require('crypto');
 
+//
 // ─────────────────────────────────────────
 // HELPER
 // ─────────────────────────────────────────
+//
 async function getAgentId(userId) {
   const { rows } = await query(
     'SELECT id FROM agents WHERE user_id = $1 AND is_active = true',
@@ -15,9 +17,11 @@ async function getAgentId(userId) {
   return rows[0]?.id || null;
 }
 
+//
 // ─────────────────────────────────────────
 // INVENTORY
 // ─────────────────────────────────────────
+//
 exports.getInventory = async (req, res, next) => {
   try {
     const agentId = await getAgentId(req.user.id);
@@ -43,9 +47,11 @@ exports.getInventory = async (req, res, next) => {
   }
 };
 
+//
 // ─────────────────────────────────────────
-// PLACE ORDER (FINAL CLEAN)
+// 🔥 PLACE ORDER (FULL FIX)
 // ─────────────────────────────────────────
+//
 exports.placeOrder = async (req, res, next) => {
   try {
     const { items, notes } = req.body;
@@ -57,88 +63,93 @@ exports.placeOrder = async (req, res, next) => {
     const agentId = await getAgentId(req.user.id);
     if (!agentId) return error(res, 'Agent not found', 404);
 
-    await query('BEGIN');
+    const result = await withTransaction(async (client) => {
 
-    const orderRes = await query(
-      `INSERT INTO tag_orders (agent_id, status, notes, created_at)
-       VALUES ($1, 'pending', $2, NOW())
-       RETURNING *`,
-      [agentId, notes || null]
-    );
-
-    const orderId = orderRes.rows[0].id;
-
-    let totalQty = 0;
-
-    for (const item of items) {
-      let { categoryId, quantity } = item;
-      quantity = Number(quantity);
-
-      if (!categoryId || !Number.isInteger(quantity) || quantity < 1) {
-        throw new Error('Invalid item data');
-      }
-
-      const { rows: cat } = await query(
-        'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
-        [categoryId]
-      );
-      if (!cat.length) throw new Error('Invalid category');
-
-      await query(
-        `INSERT INTO tag_order_items (order_id, category_id, quantity)
-         VALUES ($1, $2, $3)`,
-        [orderId, categoryId, quantity]
+      // ✅ CREATE ORDER
+      const orderRes = await client.query(
+        `INSERT INTO tag_orders (agent_id, status, notes, created_at)
+         VALUES ($1, 'pending', $2, NOW())
+         RETURNING *`,
+        [agentId, notes || null]
       );
 
-      totalQty += quantity;
+      const orderId = orderRes.rows[0].id;
 
-      const chunkSize = 500;
+      let totalQty = 0;
 
-      for (let start = 0; start < quantity; start += chunkSize) {
-        const batch = Math.min(chunkSize, quantity - start);
+      for (const item of items) {
+        let { categoryId, quantity } = item;
+        quantity = Number(quantity);
 
-        const values = [];
-        const params = [];
-
-        for (let i = 0; i < batch; i++) {
-          const qrCode = crypto.randomUUID();
-          const idx = i * 3;
-
-          values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, 'unassigned', NOW())`);
-          params.push(agentId, categoryId, qrCode);
+        if (!categoryId || !Number.isInteger(quantity) || quantity < 1) {
+          throw new Error('Invalid item data');
         }
 
-        await query(
-          `INSERT INTO tags (agent_id, category_id, qr_code, status, created_at)
-           VALUES ${values.join(',')}`,
-          params
+        const { rows: cat } = await client.query(
+          'SELECT id FROM tag_categories WHERE id = $1 AND is_active = true',
+          [categoryId]
         );
+        if (!cat.length) throw new Error('Invalid category');
+
+        // ✅ SAVE ORDER ITEMS
+        await client.query(
+          `INSERT INTO tag_order_items (order_id, category_id, quantity)
+           VALUES ($1, $2, $3)`,
+          [orderId, categoryId, quantity]
+        );
+
+        totalQty += quantity;
+
+        // 🔥 GENERATE TAGS LINKED TO ORDER
+        const chunkSize = 500;
+
+        for (let start = 0; start < quantity; start += chunkSize) {
+          const batch = Math.min(chunkSize, quantity - start);
+
+          const values = [];
+          const params = [];
+
+          for (let i = 0; i < batch; i++) {
+            const qrCode = crypto.randomUUID();
+            const idx = i * 4;
+
+            values.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, 'unassigned', NOW())`);
+            params.push(agentId, categoryId, qrCode, orderId); // ✅ LINKED
+          }
+
+          await client.query(
+            `INSERT INTO tags (agent_id, category_id, qr_code, order_id, status, created_at)
+             VALUES ${values.join(',')}`,
+            params
+          );
+        }
       }
-    }
 
-    // ✅ ONLY GENERATED (NO DUPLICATE DATA)
-    await query(
-      `UPDATE tag_orders 
-       SET qty_generated = $1
-       WHERE id = $2`,
-      [totalQty, orderId]
-    );
+      // ✅ UPDATE ORDER SUMMARY
+      await client.query(
+        `UPDATE tag_orders 
+         SET qty_generated = $1
+         WHERE id = $2`,
+        [totalQty, orderId]
+      );
 
-    await query('COMMIT');
+      return { order: orderRes.rows[0], totalQty };
+    });
 
+    // ✅ FETCH ITEMS
     const { rows: itemsData } = await query(
       `SELECT category_id, quantity 
        FROM tag_order_items 
        WHERE order_id = $1`,
-      [orderId]
+      [result.order.id]
     );
 
     return success(
       res,
       {
-        ...orderRes.rows[0],
-        qty_generated: totalQty,
-        qty_ordered: totalQty, // computed response only
+        ...result.order,
+        qty_generated: result.totalQty,
+        qty_ordered: result.totalQty,
         items: itemsData
       },
       'Order placed successfully',
@@ -146,24 +157,22 @@ exports.placeOrder = async (req, res, next) => {
     );
 
   } catch (err) {
-    try {
-      await query('ROLLBACK');
-    } catch (_) {}
-
     next(err);
   }
 };
 
+//
 // ─────────────────────────────────────────
 // GET TAGS
 // ─────────────────────────────────────────
+//
 exports.getTags = async (req, res, next) => {
   try {
     const agentId = await getAgentId(req.user.id);
     if (!agentId) return error(res, 'Agent not found', 404);
 
     const { rows } = await query(
-      `SELECT id, qr_code, status, activated_at, expires_at
+      `SELECT id, qr_code, status, activated_at, expires_at, order_id
        FROM tags
        WHERE agent_id = $1
        ORDER BY created_at DESC`,
@@ -176,9 +185,11 @@ exports.getTags = async (req, res, next) => {
   }
 };
 
+//
 // ─────────────────────────────────────────
-// GET ORDERS (FINAL SAFE)
+// GET ORDERS
 // ─────────────────────────────────────────
+//
 exports.getOrders = async (req, res, next) => {
   try {
     const agentId = await getAgentId(req.user.id);
@@ -188,13 +199,10 @@ exports.getOrders = async (req, res, next) => {
       `
       SELECT 
         o.id,
-        o.agent_id,
         o.status,
         o.notes,
         o.created_at,
-        o.updated_at,
 
-        -- always correct
         (
           SELECT COALESCE(SUM(quantity), 0)
           FROM tag_order_items 
@@ -202,18 +210,10 @@ exports.getOrders = async (req, res, next) => {
         ) AS qty_ordered,
 
         (
-          SELECT COALESCE(
-            json_agg(
-              json_build_object(
-                'category_id', category_id,
-                'quantity', quantity
-              )
-            ),
-            '[]'
-          )
-          FROM tag_order_items 
+          SELECT COUNT(*)
+          FROM tags
           WHERE order_id = o.id
-        ) AS items
+        ) AS qty_generated
 
       FROM tag_orders o
       WHERE o.agent_id = $1
@@ -228,9 +228,11 @@ exports.getOrders = async (req, res, next) => {
   }
 };
 
+//
 // ─────────────────────────────────────────
 // SALES
 // ─────────────────────────────────────────
+//
 exports.getSales = async (req, res, next) => {
   try {
     const agentId = await getAgentId(req.user.id);
@@ -251,7 +253,9 @@ exports.getSales = async (req, res, next) => {
   }
 };
 
-// ───────── GET CATEGORIES (AGENT) ─────────
+//
+// ───────── GET CATEGORIES ─────────
+//
 exports.getCategories = async (req, res, next) => {
   try {
     const { rows } = await query(
