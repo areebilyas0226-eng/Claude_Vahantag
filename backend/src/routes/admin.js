@@ -10,30 +10,33 @@ router.use(authenticate);
 router.use(requireRole('admin'));
 
 // ── ANALYTICS ────────────────────────────────────────────────────────────────
-router.get('/analytics', adminController.getAnalytics);
+router.get('/analytics',                    adminController.getAnalytics);
 
 // ── AGENTS ───────────────────────────────────────────────────────────────────
-router.post('/agents',                    adminController.createAgent);
-router.get('/agents',                     adminController.listAgents);
-router.get('/agents/:id',                 adminController.getAgentDetail);
-router.post('/agents/:id/reset-password', adminController.resetAgentPassword);
+router.post('/agents',                      adminController.createAgent);
+router.get('/agents',                       adminController.listAgents);
+router.get('/agents/:id',                   adminController.getAgentDetail);
+router.post('/agents/:id/reset-password',   adminController.resetAgentPassword);
 
 // ── ORDERS ───────────────────────────────────────────────────────────────────
-router.get('/orders',                     adminController.getOrders);
-router.post('/orders/:id/generate',       adminController.generateTags);
+router.get('/orders',                       adminController.getOrders);
+router.post('/orders/:id/generate',         adminController.generateTags);
 
 // ── TAGS ─────────────────────────────────────────────────────────────────────
-router.get('/tags',                       adminController.getTags);
+router.get('/tags',                         adminController.getTags);
 
-// ── CATEGORIES ───────────────────────────────────────────────────────────────
-router.get('/categories',                 adminController.getCategories);
-router.post('/categories',                adminController.createCategory);
-router.put('/categories/:id',             adminController.updateCategory);
+// ── CATEGORIES  (BOTH /category and /categories to avoid 404) ────────────────
+router.get('/categories',                   adminController.getCategories);
+router.post('/categories',                  adminController.createCategory);
+router.put('/categories/:id',               adminController.updateCategory);
+router.get('/category',                     adminController.getCategories);   // legacy alias
+router.post('/category',                    adminController.createCategory);  // legacy alias
+router.put('/category/:id',                 adminController.updateCategory);  // legacy alias
 
 // ── SUBSCRIPTIONS ─────────────────────────────────────────────────────────────
-router.get('/subscriptions',              adminController.getSubscriptions);
+router.get('/subscriptions',                adminController.getSubscriptions);
 
 // ── USERS ─────────────────────────────────────────────────────────────────────
-router.get('/users',                      adminController.getUsers);
+router.get('/users',                        adminController.getUsers);
 
 module.exports = router;
