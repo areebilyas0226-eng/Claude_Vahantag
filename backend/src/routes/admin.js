@@ -6,33 +6,34 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { authenticate, requireRole } = require('../middleware/auth');
 
-// 🔐 PROTECTED
 router.use(authenticate);
 router.use(requireRole('admin'));
 
-// ───────── ANALYTICS ─────────
+// ── ANALYTICS ────────────────────────────────────────────────────────────────
 router.get('/analytics', adminController.getAnalytics);
 
-// ───────── AGENTS ─────────
-router.post('/agents', adminController.createAgent);
-router.get('/agents', adminController.listAgents);
-router.get('/agents/:id', adminController.getAgentDetail);
+// ── AGENTS ───────────────────────────────────────────────────────────────────
+router.post('/agents',                    adminController.createAgent);
+router.get('/agents',                     adminController.listAgents);
+router.get('/agents/:id',                 adminController.getAgentDetail);
 router.post('/agents/:id/reset-password', adminController.resetAgentPassword);
 
-// ───────── ORDERS ─────────
-router.get('/orders', adminController.getOrders);
+// ── ORDERS ───────────────────────────────────────────────────────────────────
+router.get('/orders',                     adminController.getOrders);
+router.post('/orders/:id/generate',       adminController.generateTags);
 
-// 🔥 ADD THIS (MISSING)
-router.post('/orders/:id/generate', adminController.generateTags);
+// ── TAGS ─────────────────────────────────────────────────────────────────────
+router.get('/tags',                       adminController.getTags);
 
-// ───────── TAGS ─────────
+// ── CATEGORIES ───────────────────────────────────────────────────────────────
+router.get('/categories',                 adminController.getCategories);
+router.post('/categories',                adminController.createCategory);
+router.put('/categories/:id',             adminController.updateCategory);
 
-// 🔥 ADD THIS (MISSING)
-router.get('/tags', adminController.getTags);
+// ── SUBSCRIPTIONS ─────────────────────────────────────────────────────────────
+router.get('/subscriptions',              adminController.getSubscriptions);
 
-// ───────── CATEGORY ─────────
-router.get('/category', adminController.getCategories);
-router.post('/category', adminController.createCategory);
-router.put('/category/:id', adminController.updateCategory);
+// ── USERS ─────────────────────────────────────────────────────────────────────
+router.get('/users',                      adminController.getUsers);
 
 module.exports = router;
