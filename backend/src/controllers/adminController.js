@@ -658,26 +658,74 @@ exports.getUsers = async (req, res) => {
     return error(res, 'Failed to fetch users', 500);
   }
 };
+// ───────── DOWNLOAD TAGS PDF ─────────────────────────────────────────────────
+const PDFDocument = require('pdfkit');
+const QRCode = require('qrcode');
 
-// ───────── DOWNLOAD TAGS PDF ───────────────────────────────────────────────
 exports.downloadTagsPdf = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    if (!orderId) {
-      return error(res, 'Order ID required', 400);
+    // 1. Verify order exists
+    const { rows: orderRows } = await query(
+      `SELECT * FROM tag_orders WHERE id = $1`,
+      [orderId]
+    );
+    if (!orderRows.length) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    // ⚠️ You have NOT built PDF system yet
-    // So return proper response instead of breaking app
+    // 2. Fetch all tags for this order
+    const { rows: tags } = await query(
+      `SELECT id, qr_code, status FROM tags WHERE order_id = $1 ORDER BY id ASC`,
+      [orderId]
+    );
+    if (!tags.length) {
+      return res.status(404).json({ success: false, message: 'No tags found for this order' });
+    }
 
-    return res.status(501).json({
-      success: false,
-      message: 'PDF download not implemented yet',
-    });
+    // 3. Build PDF
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=tags-${orderId}.pdf`);
+    doc.pipe(res);
+
+    for (let i = 0; i < tags.length; i++) {
+      if (i > 0) doc.addPage();
+
+      const tag = tags[i];
+
+      // Generate QR buffer from qr_code string
+      const qrBuffer = await QRCode.toBuffer(tag.qr_code, {
+        width: 250,
+        margin: 1,
+      });
+
+      doc
+        .fontSize(14)
+        .text(`Tag ${i + 1} of ${tags.length}`, { align: 'center' });
+      
+      doc.moveDown(0.5);
+      
+      // Center the QR image manually
+      const pageWidth = doc.page.width;
+      const imgSize = 250;
+      const x = (pageWidth - imgSize) / 2;
+      doc.image(qrBuffer, x, doc.y, { width: imgSize, height: imgSize });
+      
+      doc.moveDown(10);
+      
+      doc
+        .fontSize(12)
+        .text(tag.qr_code, { align: 'center' });
+    }
+
+    doc.end();
 
   } catch (err) {
     logger.error('downloadTagsPdf error:', err.message, err.stack);
-    return error(res, 'Download failed', 500);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    }
   }
 };
