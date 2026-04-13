@@ -165,10 +165,27 @@ exports.getAgentDetail = async (req, res) => {
       [agent.id]
     );
 
-    const { rows: tags } = await query(
-      `SELECT id, qr_code, status FROM tags WHERE agent_id = $1`,
-      [agent.id]
-    );
+    const { rows: ordersRaw } = await query(
+  `SELECT 
+      id,
+      agent_id,
+      status,
+      created_at,
+      COALESCE(qty, quantity, qty_ordered, 0) AS qty,
+      COALESCE(qty_generated, 0) AS generated
+   FROM tag_orders
+   WHERE agent_id = $1
+   ORDER BY created_at DESC`,
+  [agent.id]
+);
+
+  const order = ordersRaw.map(o => ({
+  id: o.id,
+  status: o.status,
+  qty: Number(o.qty || 0),
+  generated: Number(o.generated || 0),
+  createdAt: o.created_at,
+ }));
 
     return success(res, {
       ...agent,
