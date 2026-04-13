@@ -658,3 +658,26 @@ exports.getUsers = async (req, res) => {
     return error(res, 'Failed to fetch users', 500);
   }
 };
+
+// ───────── DOWNLOAD TAGS PDF ───────────────────────────────────────────────
+exports.downloadTagsPdf = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return error(res, 'Order ID required', 400);
+    }
+
+    // ⚠️ You have NOT built PDF system yet
+    // So return proper response instead of breaking app
+
+    return res.status(501).json({
+      success: false,
+      message: 'PDF download not implemented yet',
+    });
+
+  } catch (err) {
+    logger.error('downloadTagsPdf error:', err.message, err.stack);
+    return error(res, 'Download failed', 500);
+  }
+};
